@@ -335,6 +335,62 @@ def test_approve_repairs_live_notion_card_misclassified_as_calendar(
     assert "start" not in typed["args"] and "end" not in typed["args"]
 
 
+def test_read_repairs_live_notion_card_before_the_approval_click(client):
+    """The list/detail read must expose approval, not the stale Calendar form."""
+    user = _login(client)
+    item = (
+        'Create a Notion page called "OpenClaw meeting work", add a short '
+        "summary of this meeting, and include a checklist with the next three "
+        "steps. Subject: Meeting summary. Body: stale data."
+    )
+    wrong = {"type": "calendar.create_event", "args": {}}
+    action = {
+        "item": item,
+        "owner": "Cedric",
+        "action_id": "notion-read-regression",
+        "typed": wrong,
+    }
+    store.save_artifact(
+        "bot_notion_read_regression",
+        {
+            "summary": "Duccio asked Cedric to test the Notion workflow.",
+            "actions": [action],
+            "checklist": [action],
+            "org_id": user["org_id"],
+            "avatar_id": "cedric",
+            "meeting_url": "https://meet.google.com/notion-read-test",
+        },
+        org_id=user["org_id"],
+    )
+    ledger.set_action_status(
+        "notion-read-regression",
+        "needs_details",
+        "missing: title, start, end",
+        org_id=user["org_id"],
+    )
+
+    detail = client.get(
+        "/dashboard/actions/notion-read-regression"
+    )
+    assert detail.status_code == 200
+    canonical = detail.json()["action"]
+    assert canonical["tool"] == "notion.create_page"
+    assert canonical["status"] == "proposed"
+    assert canonical["missing_params"] == []
+    assert canonical["params"]["title"] == "OpenClaw meeting work"
+
+    summary = client.get("/dashboard/summary").json()
+    card = next(
+        action
+        for meeting in summary["meetings"]
+        for action in meeting["actions"]
+        if action["action_id"] == "notion-read-regression"
+    )
+    assert card["typed"] is True
+    assert card["card_state"] == "ready_to_approve"
+    assert card["execution"]["status"] == "proposed"
+
+
 def test_flag_on_soft_failure_records_failed_receipt(client, monkeypatch):
     monkeypatch.setattr(settings, "native_executor", True)
     user = _login(client)

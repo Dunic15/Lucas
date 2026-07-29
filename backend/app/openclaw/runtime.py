@@ -14,10 +14,11 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 from .. import control_plane, native_runtime, pipedream_client, pipedream_executor, store
-from ..actions import action_plane, executor, ledger
+from ..actions import action_plane, executor, ledger, outbox
 from ..config import settings
 from . import gates
 
@@ -53,6 +54,9 @@ _ACTION_TOOL_BY_TYPE = {
 _MAX_OPENRESPONSES_TURNS = 32
 _SCHEMA_READY = False
 _SCHEMA_LOCK = threading.Lock()
+_CHAT_PG_SCHEMA_READY: bool | None = None
+_CHAT_PG_SCHEMA_LOCK = threading.Lock()
+CHAT_GREETING = "If you want to know what I can do, just ask me."
 
 
 def _now() -> float:
@@ -86,6 +90,37 @@ def _iso(value: Any) -> str:
 
 def _pg(org_id: str) -> bool:
     return bool(control_plane.enabled() and control_plane.is_durable_org(org_id))
+
+
+def _chat_pg(org_id: str) -> bool:
+    """Use Postgres for chats only after their additive migration exists."""
+    global _CHAT_PG_SCHEMA_READY
+    if not _pg(org_id):
+        return False
+    if _CHAT_PG_SCHEMA_READY is not None:
+        return _CHAT_PG_SCHEMA_READY
+    with _CHAT_PG_SCHEMA_LOCK:
+        if _CHAT_PG_SCHEMA_READY is not None:
+            return _CHAT_PG_SCHEMA_READY
+        try:
+            engine = control_plane._get_engine()
+            with engine.connect() as conn:
+                ready = conn.execute(
+                    _text(
+                        """
+                        SELECT
+                          to_regclass('public.openclaw_chat_threads')
+                            IS NOT NULL
+                          AND
+                          to_regclass('public.openclaw_chat_messages')
+                            IS NOT NULL
+                        """
+                    )
+                ).scalar_one()
+            _CHAT_PG_SCHEMA_READY = bool(ready)
+        except Exception:  # noqa: BLE001 - dev chat safely degrades to SQLite
+            _CHAT_PG_SCHEMA_READY = False
+        return _CHAT_PG_SCHEMA_READY
 
 
 def _ensure_sqlite_schema() -> None:
@@ -179,6 +214,48 @@ def _ensure_sqlite_schema() -> None:
                 ON openclaw_tool_calls(org_id, run_id, action_id)
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS openclaw_chat_threads (
+                    org_id TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    title TEXT NOT NULL DEFAULT 'New chat',
+                    meeting_id TEXT NOT NULL DEFAULT '',
+                    archived INTEGER NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY (org_id, thread_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS openclaw_chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    org_id TEXT NOT NULL,
+                    thread_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    body TEXT NOT NULL DEFAULT '',
+                    workflow_json TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL,
+                    FOREIGN KEY (org_id, thread_id)
+                      REFERENCES openclaw_chat_threads(org_id, thread_id)
+                      ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS openclaw_chat_threads_recent_idx
+                ON openclaw_chat_threads(org_id, updated_at DESC)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS openclaw_chat_messages_thread_idx
+                ON openclaw_chat_messages(org_id, thread_id, created_at, id)
+                """
+            )
         _SCHEMA_READY = True
 
 
@@ -247,6 +324,395 @@ def _event_row(row: dict) -> dict:
         "safe": _json_loads(row.get("safe_json"), {}),
         "created_at": _iso(row.get("created_at")),
     }
+
+
+def _chat_thread_row(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    return {
+        "thread_id": str(row.get("thread_id") or ""),
+        "title": str(row.get("title") or "New chat"),
+        "meeting_id": str(row.get("meeting_id") or ""),
+        "created_at": _iso(row.get("created_at")),
+        "updated_at": _iso(row.get("updated_at")),
+    }
+
+
+def _chat_message_row(row: dict | None) -> dict | None:
+    if not row:
+        return None
+    workflow = _json_loads(row.get("workflow_json"), {})
+    return {
+        "id": int(row.get("id") or 0),
+        "thread_id": str(row.get("thread_id") or ""),
+        "role": str(row.get("role") or ""),
+        "text": str(row.get("body") or ""),
+        "workflow": workflow if isinstance(workflow, dict) and workflow else None,
+        "created_at": _iso(row.get("created_at")),
+    }
+
+
+def _chat_title(text: str) -> str:
+    compact = " ".join(str(text or "").split())
+    if not compact:
+        return "New chat"
+    return compact[:57] + ("..." if len(compact) > 57 else "")
+
+
+def create_chat_thread(
+    org_id: str,
+    *,
+    meeting_id: str = "",
+    title: str = "",
+    seed_workflow: dict | None = None,
+) -> dict | None:
+    """Create one persistent org-scoped dashboard conversation."""
+    org = str(org_id or "").strip()
+    if not org or not gates.experiment_enabled_for_org(org):
+        return None
+    workflow = dict(seed_workflow or {})
+    thread_id = "oct_" + uuid.uuid4().hex
+    thread_title = str(title or "").strip()[:120]
+    if not thread_title and workflow:
+        thread_title = _chat_title(
+            "Refine " + str(workflow.get("title") or "workflow")
+        )
+    thread_title = thread_title or "New chat"
+    selected_meeting = str(meeting_id or "")[:200]
+    greeting = CHAT_GREETING
+    if workflow:
+        greeting = (
+            f'I loaded "{str(workflow.get("title") or "this workflow")[:160]}" '
+            "from Action Center. Tell me what you want to change."
+        )
+    workflow_json = _json_dumps(workflow)
+    now = _now()
+    if _chat_pg(org):
+        engine = control_plane._get_engine()
+        with engine.begin() as conn:
+            control_plane._set_org(conn, org)
+            conn.execute(
+                _text(
+                    """
+                    INSERT INTO openclaw_chat_threads
+                      (org_id, thread_id, title, meeting_id, archived,
+                       created_at, updated_at)
+                    VALUES
+                      (:org_id, :thread_id, :title, :meeting_id, false,
+                       clock_timestamp(), clock_timestamp())
+                    """
+                ),
+                {
+                    "org_id": org,
+                    "thread_id": thread_id,
+                    "title": thread_title,
+                    "meeting_id": selected_meeting,
+                },
+            )
+            conn.execute(
+                _text(
+                    """
+                    INSERT INTO openclaw_chat_messages
+                      (org_id, thread_id, role, body, workflow_json, created_at)
+                    VALUES
+                      (:org_id, :thread_id, 'assistant', :body,
+                       CAST(:workflow_json AS jsonb), clock_timestamp())
+                    """
+                ),
+                {
+                    "org_id": org,
+                    "thread_id": thread_id,
+                    "body": greeting,
+                    "workflow_json": workflow_json,
+                },
+            )
+            row = _pg_fetchone(
+                conn,
+                """
+                SELECT * FROM openclaw_chat_threads
+                WHERE org_id=:org_id AND thread_id=:thread_id
+                """,
+                {"org_id": org, "thread_id": thread_id},
+            )
+        return _chat_thread_row(row)
+    _ensure_sqlite_schema()
+    with store._LOCK, store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO openclaw_chat_threads
+              (org_id, thread_id, title, meeting_id, archived,
+               created_at, updated_at)
+            VALUES (?, ?, ?, ?, 0, ?, ?)
+            """,
+            (org, thread_id, thread_title, selected_meeting, now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO openclaw_chat_messages
+              (org_id, thread_id, role, body, workflow_json, created_at)
+            VALUES (?, ?, 'assistant', ?, ?, ?)
+            """,
+            (org, thread_id, greeting, workflow_json, now),
+        )
+        row = conn.execute(
+            """
+            SELECT * FROM openclaw_chat_threads
+            WHERE org_id=? AND thread_id=?
+            """,
+            (org, thread_id),
+        ).fetchone()
+    return _chat_thread_row(dict(row) if row else None)
+
+
+def list_chat_threads(org_id: str, limit: int = 50) -> list[dict]:
+    org = str(org_id or "").strip()
+    if not org:
+        return []
+    cap = max(1, min(int(limit or 50), 100))
+    if _chat_pg(org):
+        engine = control_plane._get_engine()
+        with engine.begin() as conn:
+            control_plane._set_org(conn, org)
+            rows = _pg_fetchall(
+                conn,
+                """
+                SELECT * FROM openclaw_chat_threads
+                WHERE org_id=:org_id AND archived=false
+                ORDER BY updated_at DESC
+                LIMIT :limit
+                """,
+                {"org_id": org, "limit": cap},
+            )
+    else:
+        _ensure_sqlite_schema()
+        with store._LOCK, store._connect() as conn:
+            rows = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT * FROM openclaw_chat_threads
+                    WHERE org_id=? AND archived=0
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                    """,
+                    (org, cap),
+                ).fetchall()
+            ]
+    return [
+        shaped
+        for shaped in (_chat_thread_row(row) for row in rows)
+        if shaped is not None
+    ]
+
+
+def get_chat_thread(org_id: str, thread_id: str) -> dict | None:
+    org = str(org_id or "").strip()
+    tid = str(thread_id or "").strip()
+    if not org or not tid:
+        return None
+    if _chat_pg(org):
+        engine = control_plane._get_engine()
+        with engine.begin() as conn:
+            control_plane._set_org(conn, org)
+            row = _pg_fetchone(
+                conn,
+                """
+                SELECT * FROM openclaw_chat_threads
+                WHERE org_id=:org_id AND thread_id=:thread_id
+                  AND archived=false
+                """,
+                {"org_id": org, "thread_id": tid},
+            )
+    else:
+        _ensure_sqlite_schema()
+        with store._LOCK, store._connect() as conn:
+            found = conn.execute(
+                """
+                SELECT * FROM openclaw_chat_threads
+                WHERE org_id=? AND thread_id=? AND archived=0
+                """,
+                (org, tid),
+            ).fetchone()
+        row = dict(found) if found else None
+    return _chat_thread_row(row)
+
+
+def list_chat_thread_messages(
+    org_id: str, thread_id: str, limit: int = 100
+) -> list[dict]:
+    org = str(org_id or "").strip()
+    tid = str(thread_id or "").strip()
+    if not org or not tid:
+        return []
+    cap = max(1, min(int(limit or 100), 200))
+    if _chat_pg(org):
+        engine = control_plane._get_engine()
+        with engine.begin() as conn:
+            control_plane._set_org(conn, org)
+            rows = _pg_fetchall(
+                conn,
+                """
+                SELECT * FROM openclaw_chat_messages
+                WHERE org_id=:org_id AND thread_id=:thread_id
+                ORDER BY created_at DESC, id DESC
+                LIMIT :limit
+                """,
+                {"org_id": org, "thread_id": tid, "limit": cap},
+            )
+    else:
+        _ensure_sqlite_schema()
+        with store._LOCK, store._connect() as conn:
+            rows = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT * FROM openclaw_chat_messages
+                    WHERE org_id=? AND thread_id=?
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                    (org, tid, cap),
+                ).fetchall()
+            ]
+    rows.reverse()
+    return [
+        shaped
+        for shaped in (_chat_message_row(row) for row in rows)
+        if shaped is not None
+    ]
+
+
+def chat_thread_detail(org_id: str, thread_id: str) -> dict | None:
+    thread = get_chat_thread(org_id, thread_id)
+    if thread is None:
+        return None
+    thread["messages"] = list_chat_thread_messages(org_id, thread_id)
+    return thread
+
+
+def add_chat_thread_message(
+    org_id: str,
+    thread_id: str,
+    role: str,
+    text: str,
+    *,
+    workflow: dict | None = None,
+    meeting_id: str | None = None,
+) -> dict | None:
+    """Append a message only when the thread belongs to this org."""
+    org = str(org_id or "").strip()
+    tid = str(thread_id or "").strip()
+    sender = str(role or "").strip().lower()
+    body = str(text or "").strip()[:8000]
+    if not org or not tid or sender not in ("user", "assistant") or not body:
+        return None
+    workflow_json = _json_dumps(dict(workflow or {}))
+    selected_meeting = (
+        str(meeting_id or "")[:200] if meeting_id is not None else None
+    )
+    proposed_title = _chat_title(body) if sender == "user" else "New chat"
+    now = _now()
+    if _chat_pg(org):
+        engine = control_plane._get_engine()
+        with engine.begin() as conn:
+            control_plane._set_org(conn, org)
+            owned = conn.execute(
+                _text(
+                    """
+                    UPDATE openclaw_chat_threads
+                    SET title=CASE
+                          WHEN title='New chat' AND :role='user'
+                          THEN :proposed_title ELSE title
+                        END,
+                        meeting_id=CASE
+                          WHEN :set_meeting THEN :meeting_id ELSE meeting_id
+                        END,
+                        updated_at=clock_timestamp()
+                    WHERE org_id=:org_id AND thread_id=:thread_id
+                      AND archived=false
+                    RETURNING thread_id
+                    """
+                ),
+                {
+                    "org_id": org,
+                    "thread_id": tid,
+                    "role": sender,
+                    "proposed_title": proposed_title,
+                    "set_meeting": selected_meeting is not None,
+                    "meeting_id": selected_meeting or "",
+                },
+            ).first()
+            if owned is None:
+                return None
+            row = conn.execute(
+                _text(
+                    """
+                    INSERT INTO openclaw_chat_messages
+                      (org_id, thread_id, role, body, workflow_json, created_at)
+                    VALUES
+                      (:org_id, :thread_id, :role, :body,
+                       CAST(:workflow_json AS jsonb), clock_timestamp())
+                    RETURNING *
+                    """
+                ),
+                {
+                    "org_id": org,
+                    "thread_id": tid,
+                    "role": sender,
+                    "body": body,
+                    "workflow_json": workflow_json,
+                },
+            ).mappings().first()
+        return _chat_message_row(dict(row) if row else None)
+    _ensure_sqlite_schema()
+    with store._LOCK, store._connect() as conn:
+        updated = conn.execute(
+            """
+            UPDATE openclaw_chat_threads
+            SET title=CASE
+                  WHEN title='New chat' AND ?='user'
+                  THEN ? ELSE title
+                END,
+                meeting_id=CASE WHEN ? THEN ? ELSE meeting_id END,
+                updated_at=?
+            WHERE org_id=? AND thread_id=? AND archived=0
+            """,
+            (
+                sender,
+                proposed_title,
+                selected_meeting is not None,
+                selected_meeting or "",
+                now,
+                org,
+                tid,
+            ),
+        )
+        if updated.rowcount != 1:
+            return None
+        inserted = conn.execute(
+            """
+            INSERT INTO openclaw_chat_messages
+              (org_id, thread_id, role, body, workflow_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (org, tid, sender, body, workflow_json, now),
+        )
+        row = conn.execute(
+            "SELECT * FROM openclaw_chat_messages WHERE id=?",
+            (int(inserted.lastrowid),),
+        ).fetchone()
+    return _chat_message_row(dict(row) if row else None)
+
+
+def chat_thread_history(org_id: str, thread_id: str, limit: int = 8) -> list[dict]:
+    return [
+        {
+            "role": message["role"],
+            "text": message["text"],
+            "workflow": message.get("workflow"),
+        }
+        for message in list_chat_thread_messages(org_id, thread_id, limit=limit)
+    ]
 
 
 def _event(org_id: str, run_id: str, kind: str, summary: str = "", *,
@@ -1033,6 +1499,17 @@ def approve_action(
     canonical = _action_for_run(org, run_id, aid)
     if canonical is None:
         return {"ok": False, "error": "Action is not part of this OpenClaw run"}
+    current_status = str(context.get("status") or "")
+    if current_status in ("running", "done"):
+        return {
+            "ok": True,
+            "run_id": run_id,
+            "action_id": aid,
+            "replay": True,
+            "status": current_status,
+        }
+    if current_status == "cancelled":
+        return {"ok": False, "error": "Action was cancelled"}
     typed = canonical.get("typed") if isinstance(canonical.get("typed"), dict) else {}
     action_type = str(typed.get("type") or "")
     missing = action_plane.missing_params(typed)
@@ -1054,11 +1531,6 @@ def approve_action(
             "error": "needs_details",
             "missing_params": sorted(set(missing)),
         }
-    current_status = str(context.get("status") or "")
-    if current_status == "done":
-        return {"ok": True, "run_id": run_id, "action_id": aid, "replay": True}
-    if current_status in ("cancelled",):
-        return {"ok": False, "error": "Action was cancelled"}
     idem = action_plane.execution_idempotency_key(aid)
     if record_decision:
         recorded = ledger.record_action_decision(
@@ -1821,12 +2293,77 @@ def _normalize_chat_workflow(
     }
 
 
+def _restore_archived_chat_workflow(raw: Any) -> dict | None:
+    """Restore a workflow that was already normalized before it was archived."""
+    if not isinstance(raw, dict):
+        return None
+    steps: list[dict] = []
+    for index, item in enumerate(raw.get("steps") or [], 1):
+        if not isinstance(item, dict) or len(steps) >= 12:
+            continue
+        action_type = str(
+            item.get("action_type") or item.get("type") or ""
+        ).strip()
+        if not action_type or (
+            action_type not in action_plane.PARAMS_SCHEMAS
+            and not pipedream_executor.generic_app(action_type)
+        ):
+            continue
+        args = item.get("args") if isinstance(item.get("args"), dict) else {}
+        depends_on: list[int] = []
+        for value in item.get("depends_on") or []:
+            try:
+                dependency = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= dependency < index and dependency not in depends_on:
+                depends_on.append(dependency)
+        stored_missing = item.get("missing_params")
+        missing = (
+            [
+                str(value)[:100]
+                for value in stored_missing
+                if str(value or "").strip()
+            ]
+            if isinstance(stored_missing, list)
+            else action_plane.missing_params(
+                {"type": action_type, "args": args}
+            )
+        )
+        steps.append(
+            {
+                "sequence": index,
+                "description": str(
+                    item.get("description") or item.get("action") or action_type
+                )[:500],
+                "action_type": action_type,
+                "args": dict(args),
+                "risk": str(
+                    item.get("risk")
+                    or action_plane.risk_for({"type": action_type})
+                    or "medium"
+                )[:20],
+                "depends_on": depends_on,
+                "missing_params": sorted(set(missing)),
+            }
+        )
+    if not steps:
+        return None
+    return {
+        "title": str(raw.get("title") or "OpenClaw workflow")[:200],
+        "summary": str(raw.get("summary") or "")[:1000],
+        "steps": steps,
+        "ready": all(not step["missing_params"] for step in steps),
+    }
+
+
 def chat(
     org_id: str,
     message: str,
     *,
     meeting_id: str = "",
     history: list[dict] | None = None,
+    thread_id: str = "",
 ) -> dict:
     """Answer product/meeting questions or propose a reviewable workflow."""
     org = str(org_id or "").strip()
@@ -1989,7 +2526,7 @@ def chat(
     headers = {
         "Content-Type": "application/json",
         "x-openclaw-session-key": "laura-openclaw-chat-" + hashlib.sha256(
-            f"{org}:{text}".encode("utf-8")
+            f"{org}:{str(thread_id or '').strip() or text}".encode("utf-8")
         ).hexdigest()[:20],
     }
     agent_id = str(settings.openclaw_agent_id or "main").strip()
@@ -2081,11 +2618,65 @@ def chat(
     return {"ok": True, "reply": reply, "workflow": workflow}
 
 
+def saved_chat_workflow_context(org_id: str, workflow_id: str) -> dict | None:
+    """Load one org-owned chat workflow for a new refinement conversation."""
+    org = str(org_id or "").strip()
+    wid = str(workflow_id or "").strip()
+    if not org or not wid:
+        return None
+    try:
+        rows = store.list_artifacts(org)
+    except Exception:  # noqa: BLE001 - a missing archive is a normal 404
+        return None
+    for row in rows:
+        if str(row.get("bot_id") or "") != wid:
+            continue
+        artifact = row.get("artifact") or {}
+        if (
+            str(artifact.get("org_id") or "") != org
+            or artifact.get("source_surface") != "openclaw_chat"
+        ):
+            return None
+        workflow = _restore_archived_chat_workflow(
+            artifact.get("openclaw_workflow")
+        )
+        if workflow is None:
+            return None
+        return {
+            "workflow": workflow,
+            "meeting_id": str(artifact.get("source_meeting_id") or ""),
+        }
+    return None
+
+
+def _index_chat_workflow_actions(
+    org_id: str, workflow_id: str, artifact: dict
+) -> None:
+    """Make chat steps canonical Actions in both durable and key-free modes."""
+    if _pg(org_id):
+        from ..actions import outbox_pg
+
+        outbox_pg.index_session_ended_actions(
+            org_id, workflow_id, artifact
+        )
+        return
+    session = SimpleNamespace(org_id=org_id, bot_id=workflow_id)
+    for action in artifact.get("actions") or []:
+        outbox.persist_queued_action(session, action)
+        typed = action.get("typed")
+        if isinstance(typed, dict) and typed.get("type"):
+            store.set_action_typed_override(
+                org_id, str(action.get("action_id") or ""), typed
+            )
+
+
 def start_chat_workflow(
     org_id: str,
     workflow: dict,
     *,
     laura_user_id: str = "",
+    source_thread_id: str = "",
+    source_meeting_id: str = "",
 ) -> dict:
     """Persist, approve and start the workflow after the user's explicit click."""
     org = str(org_id or "").strip()
@@ -2106,6 +2697,7 @@ def start_chat_workflow(
     actions = [
         {
             "action_id": action_ids[step["sequence"]],
+            "item": step["description"],
             "action": step["description"],
             "sequence": step["sequence"],
             "depends_on": [
@@ -2119,23 +2711,52 @@ def start_chat_workflow(
             },
             "risk": step["risk"],
             "owner": "OpenClaw",
+            "execution_route": "openclaw",
+            "workflow_id": workflow_id,
+            "workflow_title": normalized["title"],
+            "workflow_summary": normalized["summary"],
+            "workflow_step_count": len(normalized["steps"]),
+            "source_surface": "openclaw_chat",
         }
         for step in normalized["steps"]
     ]
+    artifact = {
+        "summary": normalized["summary"],
+        "decisions": [
+            "User explicitly started this workflow from OpenClaw Chat."
+        ],
+        "actions": actions,
+        "checklist": actions,
+        "avatar_id": "openclaw",
+        "org_id": org,
+        "meeting_url": "",
+        "meeting_type": "openclaw_workflow",
+        "visibility": "org",
+        "source_surface": "openclaw_chat",
+        "source_thread_id": str(source_thread_id or "")[:120],
+        "source_meeting_id": str(source_meeting_id or "")[:200],
+        "openclaw_workflow": normalized,
+    }
     payload = _run_input(
         workflow_id,
-        {
-            "summary": normalized["summary"],
-            "decisions": ["User explicitly started this workflow from OpenClaw Chat."],
-            "actions": actions,
-            "avatar_id": "openclaw",
-        },
+        artifact,
         org,
     )
     run, created = _insert_run(org, workflow_id, payload)
     run_id = str(run.get("run_id") or "")
     if not created or not run_id:
         return {"ok": False, "error": "Could not create workflow run"}
+    try:
+        store.save_artifact(workflow_id, artifact, org_id=org)
+        _index_chat_workflow_actions(org, workflow_id, artifact)
+    except Exception as exc:  # noqa: BLE001
+        _update_run(
+            org,
+            run_id,
+            "failed",
+            error=f"Could not persist workflow actions ({type(exc).__name__})",
+        )
+        return {"ok": False, "error": "Could not persist workflow actions"}
     _insert_action_runs(org, run_id, payload["actions"])
     _queue_for_approval(org, run_id, payload["actions"])
     approved: list[str] = []
@@ -2164,6 +2785,7 @@ def start_chat_workflow(
     return {
         "ok": True,
         "run_id": run_id,
+        "workflow_id": workflow_id,
         "workflow": normalized,
         "actions": approved,
     }

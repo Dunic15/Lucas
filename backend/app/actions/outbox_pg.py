@@ -1552,6 +1552,84 @@ def update_action_params(
     return typed
 
 
+def replace_action_typed(
+    org_id: str, action_id: str, typed: dict[str, Any], *, detail: str = ""
+) -> Optional[dict[str, Any]]:
+    """Replace a malformed durable typed spec before approval.
+
+    This is deliberately narrower than parameter editing: callers must supply a
+    complete trusted server-produced spec, and a terminal or executing action
+    can never be rewritten. Ready replacements move an old needs-details row
+    back to proposed so the dashboard can offer approval immediately.
+    """
+    aid = str(action_id or "").strip()
+    action_type = str((typed or {}).get("type") or "").strip()
+    if not aid or not action_type:
+        return None
+    normalized = {
+        "type": action_type,
+        "args": dict((typed or {}).get("args") or {}),
+    }
+    engine = _engine()
+    with engine.begin() as conn:
+        _set_org(conn, org_id)
+        row = conn.execute(
+            text(
+                """
+                SELECT execution_status
+                FROM queued_actions
+                WHERE org_id=:org_id AND action_id=:action_id
+                FOR UPDATE
+                """
+            ),
+            {"org_id": org_id, "action_id": aid},
+        ).mappings().first()
+        if row is None:
+            return None
+        status = str(row["execution_status"] or "")
+        if status in _TERMINAL_EXECUTION_STATUSES or status == "executing":
+            return None
+        missing = action_plane.missing_params(normalized)
+        new_status = status
+        if status in ("", "needs_details"):
+            new_status = "needs_details" if missing else "proposed"
+        conn.execute(
+            text(
+                f"""
+                UPDATE queued_actions
+                SET typed_json=CAST(:typed_json AS jsonb),
+                    params_schema_json=CAST(:params_schema_json AS jsonb),
+                    risk=:risk,
+                    execution_status=:new_status,
+                    execution_detail=CASE
+                      WHEN :detail <> '' THEN :detail
+                      ELSE execution_detail
+                    END,
+                    {_APPEND_LOG_SQL},
+                    updated_at=clock_timestamp()
+                WHERE org_id=:org_id AND action_id=:action_id
+                """
+            ),
+            {
+                "org_id": org_id,
+                "action_id": aid,
+                "typed_json": json.dumps(
+                    normalized, separators=(",", ":"), sort_keys=True
+                ),
+                "params_schema_json": json.dumps(
+                    action_plane.params_schema(normalized), separators=(",", ":")
+                ),
+                "risk": action_plane.risk_for(normalized),
+                "new_status": new_status,
+                "detail": str(detail or "")[:300],
+                "log_entry": _log_entry(
+                    "typed_reclassified", action_type
+                ),
+            },
+        )
+    return normalized
+
+
 def resolve_action(
     org_id: str, action_id: str, outcome: str, detail: str = ""
 ) -> bool:
