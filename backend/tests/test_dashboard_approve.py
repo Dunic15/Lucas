@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 
 import app.main as main_module
 from app import auth, executor, ledger, store
+from app.actions import outbox_pg
 from app.config import settings
 
 
@@ -389,6 +390,47 @@ def test_read_repairs_live_notion_card_before_the_approval_click(client):
     assert card["typed"] is True
     assert card["card_state"] == "ready_to_approve"
     assert card["execution"]["status"] == "proposed"
+
+
+def test_notion_repair_falls_back_for_legacy_action_without_durable_row(
+    client, monkeypatch
+):
+    user = _login(client)
+    action_id = "legacy-notion-without-pg-row"
+    replacement = {
+        "type": "notion.create_page",
+        "args": {"title": "Legacy meeting recap", "content": "Summary"},
+    }
+    monkeypatch.setattr(ledger, "_durable_actions", lambda _org: True)
+    monkeypatch.setattr(
+        outbox_pg, "replace_action_typed", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(outbox_pg, "get_action", lambda *_args: None)
+
+    repaired = ledger.replace_action_typed(
+        action_id,
+        replacement,
+        org_id=user["org_id"],
+        detail="reclassified as notion.create_page",
+    )
+
+    assert repaired == replacement
+    assert store.get_action_typed_override(
+        user["org_id"], action_id
+    ) == replacement
+
+    monkeypatch.setattr(
+        outbox_pg,
+        "get_action",
+        lambda *_args: {"execution_status": "executing"},
+    )
+    blocked_id = "durable-notion-executing"
+    assert ledger.replace_action_typed(
+        blocked_id, replacement, org_id=user["org_id"]
+    ) is None
+    assert store.get_action_typed_override(
+        user["org_id"], blocked_id
+    ) is None
 
 
 def test_flag_on_soft_failure_records_failed_receipt(client, monkeypatch):
