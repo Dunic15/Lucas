@@ -991,6 +991,10 @@ _SENSITIVE_RESPONSE_KEYS = (
 
 def _safe_proxy_data(value: Any, *, depth: int = 0) -> Any:
     """Bound and redact app data before returning a planner read to OpenClaw."""
+    if isinstance(value, str):
+        return value[:2000]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
     if depth >= 6:
         return "[truncated]"
     if isinstance(value, dict):
@@ -1004,10 +1008,6 @@ def _safe_proxy_data(value: Any, *, depth: int = 0) -> Any:
         return out
     if isinstance(value, list):
         return [_safe_proxy_data(item, depth=depth + 1) for item in value[:80]]
-    if isinstance(value, str):
-        return value[:2000]
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
     return str(value)[:500]
 
 
