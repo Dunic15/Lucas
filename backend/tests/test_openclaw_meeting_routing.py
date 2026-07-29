@@ -32,10 +32,11 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import store  # noqa: E402
-from app.actions import action_plane, executor  # noqa: E402
+from app import pipedream_client, pipedream_executor, store  # noqa: E402
+from app.actions import action_plane, app_policy, executor  # noqa: E402
 from app.api import voice_agent  # noqa: E402
 from app.brain import capabilities, engine, tool_registry, tools  # noqa: E402
+from app.config import settings  # noqa: E402
 
 
 # The ask exactly as the room said it, and the paraphrases that reach the
@@ -349,46 +350,73 @@ def test_a_failed_registry_build_never_denies_a_connection(monkeypatch):
     assert "No workspace apps are connected" not in answer
 
 
+def _catalog_entry(slug: str, deterministic: list[str]) -> dict:
+    """One app_policy.catalog row, shaped as the funnel returns it."""
+    return {
+        "slug": slug,
+        "label": slug.title(),
+        "connected": True,
+        "sources": ["pipedream"],
+        "deterministic_types": list(deterministic),
+        "api_hosts": [f"api.{slug}.com"],
+        "guides": [],
+        "can_read": True,
+        "can_write": True,
+        "requires_approval": True,
+        "adapter_required": False,
+        "risk": "high",
+        "limit": "",
+        "note": "",
+    }
+
+
 def test_registry_apps_come_from_the_org_connected_catalog(monkeypatch):
-    """assemble() must offer what the EXECUTION PLANE can run for this org,
-    not only the apps someone explicitly toggled on for this avatar."""
+    """assemble() must offer what the ORG actually connected, through the ONE
+    policy funnel (app_policy.catalog) — not a capability row that exists only
+    once someone has toggled something, and not a second catalog of its own."""
+    monkeypatch.setattr(settings, "pipedream_executor", True)
+    monkeypatch.setattr(pipedream_executor, "enabled", lambda: True)
     monkeypatch.setattr(
-        tool_registry,
-        "org_connected_apps",
-        lambda _org: {"notion": ["create page"], "github": ["create issue"]},
+        app_policy,
+        "catalog",
+        lambda _org: [
+            _catalog_entry("notion", ["notion.create_page"]),
+            _catalog_entry("github", []),
+        ],
     )
     # No explicit per-avatar switches at all — the untouched default.
     monkeypatch.setattr(store, "get_avatar_capabilities", lambda *_a, **_k: {})
+    # The plan-gated pre-built catalog must never be required.
     monkeypatch.setattr(
-        store, "capability_enabled",
-        lambda _aid, _cap, *, connected, org_id="": connected,
+        pipedream_client, "list_actions",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("not on your plan")),
     )
-    apps, org_available = tool_registry._connected_app_buckets(
-        "org-synthetic", SimpleNamespace(id="cedric")
-    )
-    assert {a["slug"] for a in apps} == {"notion", "github"}
-    assert org_available == []
-    assert dict(apps[0])["actions"]
+    reg = tool_registry.assemble("org-synthetic", SimpleNamespace(id="cedric"))
+    assert [a["slug"] for a in reg["pd_apps"]] == ["notion", "github"]
+    assert reg["pd_org_available"] == []
+    # Verbs still arrive: the deterministic type for Notion, the registry's
+    # generic fallback for the app that has no adapter.
+    assert reg["pd_apps"][0]["actions"] == ["create page"]
+    assert reg["pd_apps"][1]["actions"] == ["read data", "create and update records"]
 
 
 def test_an_explicitly_disabled_app_is_present_but_not_promised(monkeypatch):
+    monkeypatch.setattr(settings, "pipedream_executor", True)
+    monkeypatch.setattr(pipedream_executor, "enabled", lambda: True)
     monkeypatch.setattr(
-        tool_registry, "org_connected_apps", lambda _org: {"notion": ["create page"]}
+        app_policy,
+        "catalog",
+        lambda _org: [_catalog_entry("notion", ["notion.create_page"])],
     )
     monkeypatch.setattr(
         store, "get_avatar_capabilities", lambda *_a, **_k: {"notion": False}
     )
     monkeypatch.setattr(
-        store, "capability_enabled",
-        lambda _aid, cap, *, connected, org_id="": (
-            {"notion": False}.get(cap, connected)
-        ),
+        pipedream_client, "list_actions", lambda *_a, **_k: []
     )
-    apps, org_available = tool_registry._connected_app_buckets(
-        "org-synthetic", SimpleNamespace(id="cedric")
-    )
-    assert apps == []
-    assert org_available == ["notion"]
+    reg = tool_registry.assemble("org-synthetic", SimpleNamespace(id="cedric"))
+    assert reg["pd_apps"] == []
+    assert reg["pd_org_available"] == ["notion"]
     # …and the brief says so honestly rather than denying the app exists.
     text = tool_registry.brief(
         {"native": [], "pd_apps": [], "pd_org_available": ["notion"], "cedric": {}}

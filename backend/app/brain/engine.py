@@ -2544,8 +2544,13 @@ def _action_source(action: dict, brief: str = "") -> str:
 # checklist of the next three steps").
 _NOTION_CONTENT_CLAUSE = (
     r"\s+(?:with|containing|con|contenente)\s+"
-    r"(?:a\s+|an\s+|the\s+|un[oa]?\s+|il\s+|la\s+|i\s+|le\s+)?"
+    # Determiner: "with THIS meeting summary" is what people say when the page
+    # is about the call they are on.
+    r"(?:a\s+|an\s+|the\s+|this\s+|that\s+|these\s+|those\s+"
+    r"|un[oa]?\s+|il\s+|la\s+|i\s+|le\s+|quest[oaie]\s+)?"
     r"(?:short\s+|brief\s+|quick\s+|breve\s+)?"
+    # Quantity: "with THREE checklist items", "with 3 next steps".
+    r"(?:\d{1,2}\s+|three\s+|tre\s+|a\s+few\s+|some\s+|alcun[ei]\s+)?"
     r"(?:meeting\s+|call\s+|riunione\s+)?"
     r"(?:summary|recap|notes?|minutes|checklist|to-?dos?|action\s+items?"
     r"|next\s+(?:three|3|few)\s+steps?|content|body"

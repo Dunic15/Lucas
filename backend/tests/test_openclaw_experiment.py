@@ -501,7 +501,17 @@ def test_approving_one_action_never_exposes_unapproved_siblings(
     assert tool["parameters"]["properties"]["action_id"]["enum"] == [
         "oc_approved_only"
     ]
-    detail = runtime.run_detail(active_openclaw, created["run"]["run_id"])
+    # The run passes THROUGH "running" (set on the first gateway response) and
+    # returns to "queued" only when _finish_openresponses_run sees a still-
+    # unapproved sibling. requests==2 fires when the second POST *begins*, so
+    # reading here caught the transient "running" under load. Wait for the
+    # settled state instead of a request counter.
+    run_id = created["run"]["run_id"]
+    assert _wait_until(
+        lambda: (runtime.run_detail(active_openclaw, run_id) or {}).get("status")
+        == "queued"
+    )
+    detail = runtime.run_detail(active_openclaw, run_id)
     assert detail is not None
     assert detail["status"] == "queued"
     statuses = {action["action_id"]: action["status"] for action in detail["actions"]}
