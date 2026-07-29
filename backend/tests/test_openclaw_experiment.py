@@ -319,6 +319,12 @@ def test_tool_bridge_replays_duplicate_side_effect(active_openclaw, monkeypatch)
         "step_id": "send-1",
         "args": {"to": ["a@b.com"], "subject": "S", "body": "B"},
     }
+    # The bridge only executes an APPROVED action, so replay is exercised on
+    # the same path production takes: approve (which claims execution) without
+    # starting the gateway run.
+    assert runtime.approve_action(
+        active_openclaw, "oc_tool", start=False
+    )["ok"] is True
 
     first = runtime.run_tool(f"Bearer {token}", "gmail_send", body)
     second = runtime.run_tool(f"Bearer {token}", "gmail_send", body)
@@ -353,6 +359,10 @@ def test_tool_bridge_replays_action_with_a_different_step_id(
             "route": "openclaw",
         },
     )
+
+    assert runtime.approve_action(
+        active_openclaw, "oc_action_once", start=False
+    )["ok"] is True
 
     first = runtime.run_tool(
         token,
@@ -718,20 +728,40 @@ def test_openclaw_chat_answers_from_distilled_meeting_context_only(
 
     monkeypatch.setattr(settings, "openclaw_gateway_url", "http://openclaw.test")
     monkeypatch.setattr(main_module.httpx, "post", fake_post)
+    connected = (
+        ["gmail", "notion"],
+        {
+            "email.send": action_plane.params_schema({"type": "email.send"}),
+            "notion.create_page": action_plane.params_schema(
+                {"type": "notion.create_page"}
+            ),
+            pipedream_executor.PROXY_ACTION_TYPE: action_plane.params_schema(
+                {"type": pipedream_executor.PROXY_ACTION_TYPE}
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        runtime, "_connected_action_context", lambda _org: connected
+    )
+    # `chat` reads apps, schemas AND the per-app capability entries in ONE
+    # pass over the org's real connections, so that is the seam it patches.
     monkeypatch.setattr(
         runtime,
-        "_connected_action_context",
+        "_catalog_context",
         lambda _org: (
-            ["gmail", "notion"],
-            {
-                "email.send": action_plane.params_schema({"type": "email.send"}),
-                "notion.create_page": action_plane.params_schema(
-                    {"type": "notion.create_page"}
-                ),
-                pipedream_executor.PROXY_ACTION_TYPE: action_plane.params_schema(
-                    {"type": pipedream_executor.PROXY_ACTION_TYPE}
-                ),
-            },
+            *connected,
+            [
+                {
+                    "slug": slug,
+                    "label": slug,
+                    "deterministic_types": [],
+                    "can_read": True,
+                    "can_write": True,
+                    "limit": "",
+                    "risk": "high",
+                }
+                for slug in connected[0]
+            ],
         ),
     )
 
@@ -785,9 +815,22 @@ def test_openclaw_chat_answers_from_distilled_meeting_context_only(
     assert "Never ask the user to paste API responses" in (
         requests[0]["json"]["instructions"]
     )
-    assert "an omitted parent means a private workspace-root page" in (
+    # The "omitted parent ⇒ private workspace-root page" rule is Notion's own
+    # schema default (action_plane's `parent` field description, which ships in
+    # deterministic_actions), so the prompt states the app-agnostic rule and
+    # names no vendor.
+    assert "an omitted optional field means the action's own default" in (
         requests[0]["json"]["instructions"]
     )
+    assert "notion" not in requests[0]["json"]["instructions"].lower()
+    assert "workspace (default)" in (
+        payload["deterministic_actions"]["notion.create_page"][0]["description"]
+    )
+    # The planner is told to explain a capability limit, never to invent one.
+    assert "never invent, guess or approximate an api request" in (
+        requests[0]["json"]["instructions"].lower()
+    )
+    assert payload["connected_app_capabilities"][0]["requires_approval"] is True
 
 
 def test_chat_discovers_every_healthy_pipedream_account(
