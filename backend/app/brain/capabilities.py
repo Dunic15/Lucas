@@ -164,7 +164,7 @@ def is_capability_question(text: str) -> bool:
     return bool(_CAPABILITY_Q.search(text or ""))
 
 
-def _focus_app(text: str) -> str | None:
+def _focus_app(text: str, tools: dict | None = None) -> str | None:
     t = text or ""
     # Google umbrella ("what can you do in Google?") → the Google trio, no single
     # focus, so the answer covers Calendar + Gmail + Drive.
@@ -174,6 +174,16 @@ def _focus_app(text: str) -> str | None:
         return "google"
     for name, rx in _FOCUS:
         if rx.search(t):
+            return name
+    # Any OTHER app THIS org connected. The static list above cannot keep up
+    # with a workspace's connections, and an app it did not know fell through
+    # to the roster answer — which names the connected apps and so reads as a
+    # denial of the one that was asked about.
+    for name in tools or {}:
+        if not name.startswith("pd:"):
+            continue
+        slug = name[3:].replace("_", " ").strip()
+        if slug and re.search(rf"\b{re.escape(slug)}\b", t, re.I):
             return name
     return None
 
@@ -424,7 +434,10 @@ def answer(text: str, snap: dict) -> str:
     (no phantom Jira) and never flip-flops.
     """
     tools = snap.get("tools") or {}
-    focus = _focus_app(text)
+    focus = _focus_app(text, tools)
+    # The catalog could not be READ this turn. "Nothing is connected" would be
+    # a fact we do not have — the flip-flop the module exists to end.
+    unreadable = not snap.get("ok", True)
 
     if focus == "google":
         parts = [
@@ -432,10 +445,34 @@ def answer(text: str, snap: dict) -> str:
             for n in ("google_calendar", "gmail_send", "google_drive")
             if n in tools
         ]
-        return " ".join(parts) or "I don't have Google connected for this workspace."
+        if parts:
+            return " ".join(parts)
+        return (
+            "I can't read this workspace's connections right now, so I'd rather "
+            "not guess about Google — I can still capture the action for approval."
+            if unreadable
+            else "I don't have Google connected for this workspace."
+        )
 
     if focus and focus in tools:
         return _one_tool_line(focus, tools[focus])
+
+    if focus:
+        # The question named an app the snapshot has no row for. Answer about
+        # THAT app by name — falling through to the roster below would list the
+        # other apps and read as a denial of this one (live 2026-07-29).
+        disp = _display_name(focus)
+        if unreadable:
+            return (
+                f"I can't read this workspace's connections right now, so I "
+                f"can't confirm {disp} either way — I can still capture the "
+                "action and it runs once you approve it, if it's connected."
+            )
+        return (
+            f"{disp} isn't connected for this workspace, so I can't run it "
+            "here. I can still capture the action for approval, and the owner "
+            "can connect it in the dashboard."
+        )
 
     # Full roster: name only what is actually connected, plus the always-on
     # built-ins, so she never claims an app she isn't connected to.
@@ -465,6 +502,12 @@ def answer(text: str, snap: dict) -> str:
             f"For this workspace I'm connected to {joined}. I can capture actions "
             "for your approval and, once approved, run the ones that are "
             "connected." + tail
+        )
+    if unreadable:
+        return (
+            "I can't read this workspace's connections right now, so I won't "
+            "guess at what's linked — I can still answer questions and capture "
+            "actions for approval, and they run once approved."
         )
     return (
         "No workspace apps are connected here yet — I can still answer questions "
