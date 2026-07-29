@@ -58,7 +58,13 @@ def capability_family(action_type: str | None) -> str:
     # the "google" default — the WRONG toggle governed them (2026-07-24).
     if str(action_type or "").strip() in ASANA_ACTION_TYPES:
         return "asana"
-    return native_runtime.family_for(action_type) or "google"
+    native_family = native_runtime.family_for(action_type)
+    if native_family:
+        return native_family
+    # Deterministic Pipedream-only types such as notion.create_page have no
+    # native adapter. Govern them by their real app toggle, never "google".
+    mapped_app = pipedream_executor.app_for_type(str(action_type or "").strip())
+    return mapped_app or "google"
 
 
 def from_typed(typed: dict | None) -> dict | None:
@@ -95,6 +101,15 @@ def from_typed(typed: dict | None) -> dict | None:
         if t in ASANA_ACTION_TYPES and pipedream_executor.handles({"type": t}):
             args = typed.get("args") if isinstance(typed.get("args"), dict) else {}
             return {"type": t, "task": dict(args)}
+        # Deterministic Pipedream-only adapters (for example
+        # notion.create_page) use the same nested args shape as generic apps.
+        if (
+            pipedream_executor.app_for_type(t)
+            and pipedream_executor.enabled()
+            and pipedream_executor.handles({"type": t})
+        ):
+            args = typed.get("args") if isinstance(typed.get("args"), dict) else {}
+            return {"type": t, "args": dict(args)}
         return None
     action_type = normalized["type"]
     args = normalized["args"]

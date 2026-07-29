@@ -116,7 +116,10 @@ def _avatar_pd_apps(avatar_id: str, org_id: str = "") -> dict:
         )[:4]
         out: dict = {}
         for slug in slugs:
-            catalog = pipedream_client.list_actions(slug, limit=15)
+            try:
+                catalog = pipedream_client.list_actions(slug, limit=15)
+            except Exception:  # noqa: BLE001 — one app cannot hide the others
+                catalog = []
             if catalog:
                 out[slug] = catalog
         return out
@@ -1128,7 +1131,7 @@ async def _finalize_session_locked(
                 _avatar_asana_enabled, session.org_id, session.avatar_id
             )
             pd_apps = await run_in_threadpool(
-                _avatar_pd_apps, session.avatar_id
+                _avatar_pd_apps, session.avatar_id, session.org_id
             )
             summary_brief = artifact.get("summary") or ""
             # "Email X the summary of this meeting" → Subject/Body prefilled

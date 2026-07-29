@@ -59,6 +59,13 @@ _DISPLAY = {
     "date_math": "date math",
     "web_search": "web search",
     "lookup_record": "a demo record lookup",
+    "pd:notion": "Notion",
+    "pd:github": "GitHub",
+    "pd:hubspot": "HubSpot",
+    "pd:jira": "Jira",
+    "pd:linear": "Linear",
+    "pd:stripe": "Stripe",
+    "pd:salesforce": "Salesforce",
 }
 
 # ── capability-question classifier ──────────────────────────────────────
@@ -112,6 +119,13 @@ _CAPABILITY_Q = re.compile(
 # full roster.
 _FOCUS = [
     ("asana_tasks", re.compile(r"\basana\b", re.I)),
+    ("pd:notion", re.compile(r"\bnotion\b", re.I)),
+    ("pd:github", re.compile(r"\bgithub\b", re.I)),
+    ("pd:hubspot", re.compile(r"\bhubspot\b", re.I)),
+    ("pd:jira", re.compile(r"\bjira\b", re.I)),
+    ("pd:linear", re.compile(r"\blinear\b", re.I)),
+    ("pd:stripe", re.compile(r"\bstripe\b", re.I)),
+    ("pd:salesforce", re.compile(r"\bsalesforce\b", re.I)),
     ("google_drive", re.compile(r"\b(google\s+)?drive\b", re.I)),
     ("gmail_send", re.compile(r"\b(gmail|e-?mail|mail|inbox|posta)\b", re.I)),
     ("google_calendar", re.compile(r"\bcalendar\b|\bcalendario\b", re.I)),
@@ -162,6 +176,14 @@ def _focus_app(text: str) -> str | None:
         if rx.search(t):
             return name
     return None
+
+
+def _display_name(name: str) -> str:
+    if name in _DISPLAY:
+        return _DISPLAY[name]
+    if name.startswith("pd:"):
+        return name[3:].replace("_", " ").title()
+    return name
 
 
 # ── the deterministic truth object ──────────────────────────────────────
@@ -256,6 +278,58 @@ def snapshot(avatar: Any, org_id: str, session: Any = None) -> dict:
             "supported_verbs": verbs,
             "unavailable_reason": reason,
         }
+    # Generic connected apps live outside registry.native. Include both the
+    # avatar-enabled set and the org-connected-but-disabled set so a capability
+    # answer can never flatten "Notion is connected but off for Cedric" into
+    # the false "Notion isn't connected".
+    for app in reg.get("pd_apps") or []:
+        slug = str((app or {}).get("slug") or "").strip().lower()
+        if not slug:
+            continue
+        name = f"pd:{slug}"
+        raw_verbs = (app or {}).get("actions") or []
+        verbs = [str(v).strip() for v in raw_verbs if str(v).strip()]
+        try:
+            from .. import pipedream_executor
+
+            rep = next(
+                (
+                    action_type
+                    for action_type, spec in pipedream_executor._MAPPER.items()
+                    if spec[0] == slug
+                ),
+                f"pd.{slug}.run",
+            )
+            route = executor.route_for_typed({"type": rep}, org_id)
+        except Exception:  # noqa: BLE001 — capability speech must not fail
+            route = "pipedream"
+        tools[name] = {
+            "connected_for_org": True,
+            "enabled_for_avatar": True,
+            "live_health": "ok",
+            "snapshot_available_in_meeting": None,
+            "can_read_now": False,
+            "can_execute_now": True,
+            "execution_route": route or "pipedream",
+            "supported_verbs": verbs,
+            "unavailable_reason": "",
+        }
+    for raw_slug in reg.get("pd_org_available") or []:
+        slug = str(raw_slug or "").strip().lower()
+        name = f"pd:{slug}"
+        if not slug or name in tools:
+            continue
+        tools[name] = {
+            "connected_for_org": True,
+            "enabled_for_avatar": False,
+            "live_health": "ok",
+            "snapshot_available_in_meeting": None,
+            "can_read_now": False,
+            "can_execute_now": False,
+            "execution_route": "pipedream",
+            "supported_verbs": [],
+            "unavailable_reason": "connected, but not enabled for this avatar",
+        }
     return {"generated_at": time.time(), "tools": tools, "ok": ok}
 
 
@@ -306,12 +380,18 @@ def cached_snapshot(avatar: Any, org_id: str, session: Any = None) -> dict:
 
 # ── deterministic spoken answer ─────────────────────────────────────────
 def _one_tool_line(name: str, s: dict) -> str:
-    disp = _DISPLAY.get(name, name)
+    disp = _display_name(name)
     if not s["connected_for_org"]:
         return f"{disp} isn't connected for this workspace, so I can't use it here."
+    if not s["enabled_for_avatar"]:
+        return (
+            f"{disp} is connected for this workspace, but it isn't enabled for "
+            "this agent, so I can't run its actions yet."
+        )
     route = s["execution_route"]
     where = (
         " through Pipedream" if route == "pipedream"
+        else " through OpenClaw after approval" if route == "openclaw"
         else " through this workspace's connected account" if route == "native"
         else ""
     )
@@ -360,9 +440,11 @@ def answer(text: str, snap: dict) -> str:
     # Full roster: name only what is actually connected, plus the always-on
     # built-ins, so she never claims an app she isn't connected to.
     connected = [
-        _DISPLAY.get(n, n)
+        _display_name(n)
         for n, s in tools.items()
-        if s["connected_for_org"] and n in _REP_TYPE
+        if s["connected_for_org"]
+        and s["enabled_for_avatar"]
+        and (n in _REP_TYPE or n.startswith("pd:"))
     ]
     if connected:
         joined = (
@@ -374,7 +456,7 @@ def answer(text: str, snap: dict) -> str:
         for n, s in tools.items():
             if s["connected_for_org"] and s["snapshot_available_in_meeting"] is False:
                 tail = (
-                    f" I don't have a snapshot of your {_DISPLAY.get(n, n)} "
+                    f" I don't have a snapshot of your {_display_name(n)} "
                     f"{_SNAPSHOT_NOUN.get(n, 'workspace')} loaded for this "
                     "meeting yet, so I can't read existing items now."
                 )
