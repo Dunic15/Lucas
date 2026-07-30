@@ -76,18 +76,17 @@ def test_customer_avatars_publish_explicit_renderer_readiness():
     laura = avatars.load("laura").renderer_readiness
     cedric = avatars.load("cedric").renderer_readiness
     # Photoreal shelved (owner 2026-07-22: Runpod credit parked at $1.67 and
-    # the pod stopped — an accidental wake would burn it). Laura runs the free
-    # 3D renderer; the photoreal ASSETS stay ready so `face: photoreal` in
-    # avatar.yaml re-enables Ultra-HD with zero other changes.
-    assert laura["preferred"] == "talk"
+    # the pod stopped — an accidental wake would burn it). The photoreal ASSETS
+    # stay ready so `face: photoreal` in avatar.yaml re-enables Ultra-HD with
+    # zero other changes.
+    # Laura + Cedric wear the TILE face (owner 2026-07-30): the profile
+    # picture in a circle with the voice-reactive ring — the Google-Meet
+    # camera-off look. talk/robot/photoreal remain one yaml line away.
+    assert laura["preferred"] == "tile"
     assert laura["fallback"] == "talk"
     assert laura["photoreal"]["asset"] == "reference-laura.jpg"
     assert laura["talk"]["asset"] == "laura.glb"
-    # Cedric is back on the plain 3D head (owner 2026-07-28, after seeing the
-    # hologram in a real meeting grid: next to tiles of actual faces a glowing
-    # head reads as a gimmick). The /robot tier is untouched and one line in
-    # avatar.yaml away — his readiness rides on the same talk asset either way.
-    assert cedric["preferred"] == "talk"
+    assert cedric["preferred"] == "tile"
     assert cedric["fallback"] == "photoreal"
     assert cedric["talk"]["asset"] == "cedric.glb"
     assert cedric["photoreal"]["asset"] == "reference-cedric.jpg"

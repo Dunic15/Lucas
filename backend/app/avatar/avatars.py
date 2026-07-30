@@ -149,11 +149,19 @@ class Avatar:
         photoreal_ready = (
             portrait_safe and (repo / "gpu" / "assets" / portrait_name).is_file()
         )
+        # "tile" renders the same identity portrait the photoreal fallback
+        # serves (curated portrait-<id>.jpg wins inside /laura-reference.jpg,
+        # the reference is the guaranteed floor) — its readiness IS the
+        # portrait's readiness.
+        tile_ready = photoreal_ready or (
+            repo / "gpu" / "assets" / f"portrait-{self.id.lower()}.jpg"
+        ).is_file()
         preferred_ready = (
             photoreal_ready if self.page == "photoreal"
             # "robot" projects the same GLB head /talk renders — its readiness
             # IS the talk asset's readiness (no extra asset of its own).
             else talk_ready if self.page in ("talk", "robot")
+            else tile_ready if self.page == "tile"
             else bool(self.anam_avatar_id)
         )
         return {
@@ -284,7 +292,7 @@ def load(avatar_id: str) -> Avatar:
         ),
         # face tier: only the known page names pass; anything else falls back
         # to "" (= global default) rather than producing a 404 camera URL.
-        face=(lambda f: f if f in ("talk", "photoreal", "avatar", "robot") else "")(
+        face=(lambda f: f if f in ("talk", "photoreal", "avatar", "robot", "tile") else "")(
             str(_coalesce(raw.get("face"), "")).strip().lower()
         ),
         face_fallback=(

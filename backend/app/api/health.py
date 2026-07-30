@@ -8,7 +8,7 @@ import time
 from fastapi import APIRouter, Request
 
 # Bumped manually with any deploy whose arrival must be externally visible.
-BUILD_MARK = "2026-07-30-repo-owned-face"
+BUILD_MARK = "2026-07-30-tile-in-loader-whitelist"
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
