@@ -1,0 +1,80 @@
+# OpenClaw gateway — DEVELOPMENT ONLY.
+#
+# Runs on a small EC2 host (not on anyone's laptop), behind Caddy for
+# automatic TLS. Every image is pinned by digest: a floating `latest` would
+# let the runtime change under us between a working test and a deploy, which
+# is exactly the failure this package exists to avoid.
+#
+# Secrets are NEVER in this file or in the image. bin/bootstrap.sh fetches
+# them from SSM Parameter Store (SecureString, KMS at rest) into an env file
+# that is root-owned, 0600, and lives only on the instance.
+#
+# State is persisted to a Docker volume backed by the EBS data disk, so a
+# container restart or an image bump does not lose OpenClaw's session state.
+services:
+  openclaw:
+    # Pinned by digest, not tag. Update deliberately via bin/update-image.sh.
+    image: ghcr.io/openclaw/openclaw@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    container_name: openclaw
+    restart: unless-stopped
+    env_file:
+      - /opt/openclaw/secrets.env      # written by bootstrap.sh from SSM, 0600
+    environment:
+      OPENCLAW_CONFIG: /config/openclaw.json
+      OPENCLAW_STATE_DIR: /state
+      # Bind to loopback only: Caddy is the sole ingress. The container port
+      # is never published to the host's public interface.
+      OPENCLAW_HOST: 0.0.0.0
+      OPENCLAW_PORT: "8080"
+    volumes:
+      - ./openclaw.json:/config/openclaw.json:ro
+      - openclaw-state:/state
+    expose:
+      - "8080"
+    healthcheck:
+      # The gateway is "healthy" only when it answers the endpoint Laura
+      # actually calls — a process-liveness check would mask a broken route.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 1500M
+
+  caddy:
+    # TLS termination + the ONLY public listener.
+    image: caddy@sha256:1111111111111111111111111111111111111111111111111111111111111111
+    container_name: caddy
+    restart: unless-stopped
+    depends_on:
+      openclaw:
+        condition: service_healthy
+    ports:
+      - "80:80"     # ACME HTTP-01 challenge + redirect to 443
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data          # ACME account + issued certs (persisted)
+      - caddy-config:/config
+    environment:
+      GATEWAY_DOMAIN: ${GATEWAY_DOMAIN:?set GATEWAY_DOMAIN, e.g. openclaw-next.example.com}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  # Named volumes live under /var/lib/docker on the EBS data disk, so they
+  # survive container recreation and are captured by bin/backup.sh.
+  openclaw-state:
+  caddy-data:
+  caddy-config:

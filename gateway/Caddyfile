@@ -1,0 +1,57 @@
+# TLS termination for the OpenClaw gateway — DEVELOPMENT ONLY.
+#
+# Caddy is the sole public listener. It obtains and renews a Let's Encrypt
+# certificate automatically (ACME HTTP-01 on :80), so TLS does not depend on
+# anyone remembering to rotate a cert. The OpenClaw container is never
+# published directly; it is reachable only over the compose network.
+
+{
+	# A real address so ACME failures are actionable rather than silent.
+	email {$ACME_EMAIL:devops@example.com}
+}
+
+{$GATEWAY_DOMAIN} {
+	encode gzip
+
+	# Defence in depth: OpenClaw itself requires a bearer token
+	# (server.auth.required=true). This second check means a
+	# misconfigured runtime can never briefly expose an open relay.
+	@unauthenticated not header Authorization "Bearer *"
+	respond @unauthenticated 401 {
+		body "gateway authentication required"
+		close
+	}
+
+	# Only the endpoints Laura actually calls are proxied. Anything else is
+	# 404 — no admin surface, no model listing, no debug routes exposed.
+	@allowed path /v1/responses /v1/responses/* /health
+	handle @allowed {
+		reverse_proxy openclaw:8080 {
+			# The backend allows 90s per run; give the upstream headroom so a
+			# slow-but-valid run is not cut off mid-tool-call.
+			transport http {
+				read_timeout 120s
+				write_timeout 120s
+			}
+			health_uri /health
+			health_interval 30s
+		}
+	}
+
+	handle {
+		respond 404
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	log {
+		output stdout
+		format json
+		# Request bodies carry Laura's action plans; never log them.
+	}
+}
