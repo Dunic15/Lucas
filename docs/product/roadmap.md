@@ -37,6 +37,7 @@ Doc collegati: [NATIVE-INTEGRATIONS-PLAN.md](NATIVE-INTEGRATIONS-PLAN.md) ·
 | 4 | **Etiquette "scusarsi entrando"** (estende first-call activation) | Claude | live-path: review attenta |
 | 5 | **Security crypto** — prima di accendere l'executor: KMS/Fernet al posto della crypto stdlib fatta a mano | Claude | GATE per #1 |
 | 6 | **Fix calendar-connect Cedric** (stale-read serverless) | **Ben** | atomica #39 in main; resta il read runtime |
+| 19 | **Meeting Memory Graph — Slice 1 (accumulating brain)**: finalize deposita il meeting distillato + digest "ultimi 7 giorni" (UNA chiamata LLM, TTL-cached) nel pre-meeting brief. Flag `MEETING_MEMORY_ENABLED=false`. Spec: [MEETING-MEMORY-SPEC.md](../company-brain/MEETING-MEMORY-SPEC.md) | Claude | seams: lifecycle.py brief-gather + finalize + migrazione 0012 |
 
 ## NEXT (1–2 settimane)
 | # | Item | Owner |
@@ -48,6 +49,7 @@ Doc collegati: [NATIVE-INTEGRATIONS-PLAN.md](NATIVE-INTEGRATIONS-PLAN.md) ·
 | 11 | **Intervention-mode admin** + **host-preview DM** | Claude |
 | 12 | **Demo account "setting perfetto"** (investor/YC) | Duccio + Claude |
 | 13 | **API-key self-serve** (bring-your-own key in un vault) | **Ben** + Claude |
+| 20 | **Meeting Memory Graph — Slice 2**: meeting-as-document nel knowledge plane (ACL all-attendees + org-public + admin-grant, ratificata 2026-07-30) + tool `meeting_memory_search` + entità/archi + linkage nel rolling summary | Claude |
 
 ## LATER
 | # | Item | Owner |
@@ -57,6 +59,7 @@ Doc collegati: [NATIVE-INTEGRATIONS-PLAN.md](NATIVE-INTEGRATIONS-PLAN.md) ·
 | 16 | **Photoreal Ditto — Fase 3**: web call ultra-HD/4K off-meeting (unico posto oltre i 720p) | Claude (infra) |
 | 17 | Email vere per-avatar (multi-tenancy) | Claude |
 | 18 | **GPT Live experiment** — A/B OpenAI Realtime (`gpt-realtime`) vs Gemini Live sul path voce+turn-taking; metrica: latenza, qualità turn-taking, €/min, se batte lo split Cerebras-brain + ElevenLabs-voce | Claude (dopo Gemini) |
+| 21 | **Meeting Memory Graph — Slice 3**: compattazione a livelli (hot 7g / warm 12 mesi / cold structured-only), merge alias persone, "forget this meeting", audit reader | Claude |
 
 > **One-login: DEPRIORITIZZATO** (owner: di fatto già così, login Cedric una volta sola).
 

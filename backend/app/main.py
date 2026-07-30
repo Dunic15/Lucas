@@ -118,6 +118,7 @@ from .meeting.lifecycle import (  # noqa: E402  (hoisted lifecycle core; re-impo
 )
 from .api.deps import EMAIL_RE, _split_emails, _calendar_target_emails, _gmail_state, _line_for  # noqa: E402
 from .config import settings
+from .memory import meeting_memory
 from .decision import (
     addressed_to_other,
     adaptive_deference_seconds,
@@ -3911,10 +3912,36 @@ async def recall_webhook(request: Request) -> JSONResponse:
 
     # Cross-meeting memory: lazily (re)load after a process restart, scoped to
     # this session's org (never another tenant's open items in the live prompt).
+    # KNOWN GAP: only the carryover + week blocks are recomposed here — the
+    # Drive/Asana/calendar blocks from session start are lost on an instance
+    # replacement (pre-existing; they need their own cached re-derivation).
     if session.memory_brief is None:
-        session.memory_brief = await run_in_threadpool(
+        rebuilt = await run_in_threadpool(
             ledger.carryover_brief, session.meeting_url, org_id=session.org_id
         )
+        # Stale-ok cached read ONLY — this is the live path; regeneration (a
+        # model call) belongs to session start, never here. Hard-bounded:
+        # cached_digest is the live path's ONLY Postgres touch, and a hung
+        # control plane must cost this webhook at most ~1.5s once per restart
+        # (errors already return ""; wait_for bounds the hang case).
+        try:
+            week = await asyncio.wait_for(
+                run_in_threadpool(
+                    meeting_memory.cached_digest,
+                    session.org_id,
+                    session.avatar_id,
+                ),
+                timeout=1.5,
+            )
+        except Exception:  # noqa: BLE001 — best-effort, incl. TimeoutError
+            week = ""
+        if week:
+            rebuilt = (
+                "[Last 7 days — what the company discussed and decided, "
+                f"distilled from past meetings with dates]\n{week}\n\n"
+                + (rebuilt or "")
+            )
+        session.memory_brief = rebuilt
     memory = session.memory_brief or ""
     memory = cedric.inject_brief(session, memory)  # CEDRIC: brief ahead of carryover
 
