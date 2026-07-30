@@ -491,6 +491,17 @@ principals). ✦ Starts only after the owner green-lights it post-Slice-1 audit.
 
 ### LATER — Slice 3: "It stays clean and it stays small"
 
+> **As built (2026-07-30):** compaction is a per-org pass (`compact()`)
+> throttled to once per org per day and fired best-effort AFTER each deposit
+> (`maybe_compact`) — no cross-org discovery job needed; an org with no
+> meetings needs no compaction. The series fold writes a DETERMINISTIC
+> digest chunk (dates + decisions, no LLM — key-free-safe and cheaper; the
+> LLM variant in §9 stays an option). Cold = chunks deleted, structured row
+> kept forever. `POST /org/memory/forget` + `GET /org/memory/summary` on the
+> machine door. Config: `MEETING_MEMORY_RETENTION_DAYS=365`,
+> `MEETING_MEMORY_MAX_DOCS=5000`, `MEETING_MEMORY_SERIES_CAP=200`,
+> `MEETING_MEMORY_SERIES_KEEP=20`.
+
 Compaction job + tiers + caps · alias merge hardening · "forget this meeting" ·
 dashboard "what the brain remembers" (entities, recent meetings, sources) ·
 retention runbook → scheduled job (risk #8 in `RISKS-AND-MILESTONES.md`) ·

@@ -896,3 +896,300 @@ def set_visibility(org_id: str, bot_id: str, visibility: str) -> dict:
             {"org_id": str(org_id), "bot": str(bot_id), "v": visibility},
         ).rowcount
     return {"ok": bool(n), "updated": int(n or 0)}
+
+
+# ── bounded growth (Slice 3): compaction tiers, forget, summary ─────────────
+#
+# Spec §9 (owner-ratified 2026-07-30): hot 7 days / warm 12 months (full text
+# + embeddings) / cold forever (structured rows only — dates, attendees,
+# decision lines; chunks and embeddings deleted). Compaction is throttled to
+# once per org per day, fired best-effort AFTER a deposit (no cross-org
+# discovery needed — an org with no meetings needs no compaction), and every
+# step is idempotent.
+
+_last_compaction: dict[str, float] = {}  # org_id -> monotonic-ish epoch
+
+
+def maybe_compact(org_id: str) -> bool:
+    """Run the daily compaction for one org if due. Never raises."""
+    import time as _time
+
+    try:
+        if not enabled() or not control_plane.is_durable_org(str(org_id or "")):
+            return False
+        org_id = str(org_id)
+        now = _time.time()
+        if now - _last_compaction.get(org_id, 0.0) < 86_400:
+            return False
+        _last_compaction[org_id] = now
+        compact(org_id)
+        return True
+    except Exception:
+        return False
+
+
+def compact(org_id: str) -> dict:
+    """The three tiers, in one pass (idempotent):
+    1. AGE: meetings older than retention_days lose their chunks.
+    2. SERIES: a meeting_key beyond series_cap keeps only the newest
+       series_keep individually chunked; the folded tail becomes ONE
+       deterministic digest chunk on the newest folded meeting.
+    3. ORG CAP: beyond max_docs chunked meetings, the oldest go cold.
+    Also prunes low-confidence 'mentions' edges unreferenced for 180 days.
+    Structured rows are NEVER deleted here — cold means text-free."""
+    stats = {"age_cold": 0, "series_folded": 0, "cap_cold": 0, "edges_pruned": 0}
+    retention_days = int(settings.meeting_memory_retention_days)
+    max_docs = int(settings.meeting_memory_max_docs)
+    series_cap = int(settings.meeting_memory_series_cap)
+    series_keep = max(1, int(settings.meeting_memory_series_keep))
+    with _engine().begin() as conn:
+        _set_org(conn, org_id)
+        # Bounded like search(): compaction shares the live pool — a
+        # pathological org must not hold a connection open-endedly.
+        conn.execute(text("SET LOCAL statement_timeout = 30000"))
+        if retention_days > 0:
+            stats["age_cold"] = conn.execute(
+                text(
+                    """
+                    DELETE FROM memory_chunks c
+                    USING memory_meetings m
+                    WHERE c.org_id = CAST(:org_id AS uuid)
+                      AND m.org_id = c.org_id AND m.id = c.meeting_id
+                      AND m.ended_at < clock_timestamp()
+                          - (:days * interval '1 day')
+                    """
+                ),
+                {"org_id": org_id, "days": retention_days},
+            ).rowcount or 0
+
+        # Series fold. Find series over cap, fold their tail.
+        series = conn.execute(
+            text(
+                """
+                SELECT meeting_key, count(*) AS n
+                FROM memory_meetings
+                WHERE org_id = CAST(:org_id AS uuid) AND meeting_key <> ''
+                GROUP BY meeting_key HAVING count(*) > :cap
+                """
+            ),
+            {"org_id": org_id, "cap": series_cap},
+        ).mappings().all()
+        for s in series:
+            folded = conn.execute(
+                text(
+                    """
+                    SELECT id, to_char(ended_at, 'MM-DD') AS day,
+                           summary, decisions_json
+                    FROM memory_meetings
+                    WHERE org_id = CAST(:org_id AS uuid)
+                      AND meeting_key = :mk
+                    ORDER BY ended_at DESC
+                    OFFSET :keep
+                    """
+                ),
+                {"org_id": org_id, "mk": s["meeting_key"], "keep": series_keep},
+            ).mappings().all()
+            if not folded:
+                continue
+            lines = []
+            for r in folded[:200]:
+                decisions = [
+                    d for d in json.loads(r["decisions_json"] or "[]") if d
+                ][:2]
+                line = f"{r['day']}: {(r['summary'] or '')[:120]}"
+                if decisions:
+                    line += " Decided: " + "; ".join(d[:80] for d in decisions)
+                lines.append(line)
+            digest_text = (
+                f"Series digest ({len(folded)} earlier meetings, oldest text "
+                "compacted):\n" + "\n".join(lines)
+            )[:4000]
+            ids = [str(r["id"]) for r in folded]
+            conn.execute(
+                text(
+                    """
+                    DELETE FROM memory_chunks
+                    WHERE org_id = CAST(:org_id AS uuid)
+                      AND meeting_id = ANY(CAST(:ids AS uuid[]))
+                    """
+                ),
+                {"org_id": org_id, "ids": ids},
+            )
+            newest_folded = ids[0]
+            emb, prov = "", ""
+            try:
+                from ..brain import embeddings
+
+                emb = json.dumps(
+                    [round(float(x), 6)
+                     for x in embeddings.embed([digest_text])[0]]
+                )
+                prov = embeddings.provider_signature()
+            except Exception:
+                pass
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO memory_chunks (
+                      org_id, meeting_id, idx, text,
+                      embedding_provider, embedding_json
+                    ) VALUES (
+                      CAST(:org_id AS uuid), :mid, 0, :text, :prov, :emb
+                    )
+                    ON CONFLICT (org_id, meeting_id, idx) DO UPDATE SET
+                      text = EXCLUDED.text,
+                      embedding_provider = EXCLUDED.embedding_provider,
+                      embedding_json = EXCLUDED.embedding_json
+                    """
+                ),
+                {"org_id": org_id, "mid": newest_folded,
+                 "text": digest_text, "prov": prov, "emb": emb},
+            )
+            stats["series_folded"] += len(folded)
+
+        # Org cap: oldest chunked meetings beyond max_docs go cold.
+        if max_docs > 0:
+            over = conn.execute(
+                text(
+                    """
+                    SELECT m.id
+                    FROM memory_meetings m
+                    WHERE m.org_id = CAST(:org_id AS uuid)
+                      AND EXISTS (
+                        SELECT 1 FROM memory_chunks c
+                        WHERE c.org_id = m.org_id AND c.meeting_id = m.id
+                      )
+                    ORDER BY m.ended_at DESC
+                    OFFSET :cap
+                    """
+                ),
+                {"org_id": org_id, "cap": max_docs},
+            ).scalars().all()
+            if over:
+                stats["cap_cold"] = conn.execute(
+                    text(
+                        """
+                        DELETE FROM memory_chunks
+                        WHERE org_id = CAST(:org_id AS uuid)
+                          AND meeting_id = ANY(CAST(:ids AS uuid[]))
+                        """
+                    ),
+                    {"org_id": org_id, "ids": [str(i) for i in over]},
+                ).rowcount or 0
+
+        stats["edges_pruned"] = conn.execute(
+            text(
+                """
+                DELETE FROM memory_edges
+                WHERE org_id = CAST(:org_id AS uuid)
+                  AND rel = 'mentions' AND confidence < 0.7
+                  AND created_at < clock_timestamp() - interval '180 days'
+                """
+            ),
+            {"org_id": org_id},
+        ).rowcount or 0
+    # PII-safe: counts only.
+    print(f"[memory] compact {stats}", flush=True)
+    return stats
+
+
+def forget(org_id: str, bot_id: str) -> dict:
+    """'Forget this meeting' (spec §7 / risk #3): delete its chunks, edges,
+    attendees and grants; blank the distilled text on the structured row
+    (tombstone — the row itself stays so bot_id can't be silently re-used);
+    invalidate the org's digests so the next brief regenerates without it."""
+    if not enabled() or not control_plane.is_durable_org(str(org_id or "")):
+        return {"ok": False, "error": "disabled"}
+    org_id = str(org_id)
+    with _engine().begin() as conn:
+        _set_org(conn, org_id)
+        mid = conn.execute(
+            text(
+                "SELECT id FROM memory_meetings "
+                "WHERE org_id = CAST(:org_id AS uuid) AND bot_id = :bot"
+            ),
+            {"org_id": org_id, "bot": str(bot_id)},
+        ).scalar()
+        if not mid:
+            return {"ok": False, "error": "unknown meeting"}
+        for table in ("memory_chunks", "memory_edges", "memory_attendees",
+                      "memory_grants"):
+            conn.execute(
+                text(
+                    f"DELETE FROM {table} "
+                    "WHERE org_id = CAST(:org_id AS uuid) AND meeting_id = :mid"
+                ),
+                {"org_id": org_id, "mid": mid},
+            )
+        conn.execute(
+            text(
+                """
+                UPDATE memory_meetings SET
+                  summary = '', decisions_json = '[]', actions_json = '[]',
+                  missing_steps_json = '[]', meeting_type = 'forgotten'
+                WHERE org_id = CAST(:org_id AS uuid) AND id = :mid
+                """
+            ),
+            {"org_id": org_id, "mid": mid},
+        )
+        conn.execute(
+            text("DELETE FROM memory_digests WHERE org_id = CAST(:org_id AS uuid)"),
+            {"org_id": org_id},
+        )
+    return {"ok": True, "meeting_id": str(mid)}
+
+
+def org_summary(org_id: str) -> dict:
+    """'What the brain remembers' — counts + a recent distilled projection.
+    Display names only (same exposure class as artifacts), never content
+    beyond the stored distilled fields."""
+    if not enabled() or not control_plane.is_durable_org(str(org_id or "")):
+        return {"ok": False, "error": "disabled"}
+    org_id = str(org_id)
+    with _engine().begin() as conn:
+        _set_org(conn, org_id)
+        counts = dict(
+            conn.execute(
+                text(
+                    "SELECT kind, count(*) FROM memory_entities "
+                    "WHERE org_id = CAST(:org_id AS uuid) GROUP BY kind"
+                ),
+                {"org_id": org_id},
+            ).fetchall()
+        )
+        n_meetings, n_chunked = conn.execute(
+            text(
+                """
+                SELECT count(*),
+                       count(*) FILTER (WHERE EXISTS (
+                         SELECT 1 FROM memory_chunks c
+                         WHERE c.org_id = m.org_id AND c.meeting_id = m.id))
+                FROM memory_meetings m
+                WHERE m.org_id = CAST(:org_id AS uuid)
+                """
+            ),
+            {"org_id": org_id},
+        ).fetchone()
+        recent = [
+            dict(r)
+            for r in conn.execute(
+                text(
+                    """
+                    SELECT bot_id, to_char(ended_at, 'YYYY-MM-DD') AS day,
+                           meeting_type, visibility,
+                           left(summary, 200) AS summary
+                    FROM memory_meetings
+                    WHERE org_id = CAST(:org_id AS uuid)
+                    ORDER BY ended_at DESC LIMIT 10
+                    """
+                ),
+                {"org_id": org_id},
+            ).mappings().all()
+        ]
+    return {
+        "ok": True,
+        "meetings": int(n_meetings or 0),
+        "meetings_with_text": int(n_chunked or 0),
+        "entities": counts,
+        "recent": recent,
+    }

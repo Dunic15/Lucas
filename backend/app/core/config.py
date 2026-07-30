@@ -468,6 +468,18 @@ class Settings(BaseSettings):
     # matches then count as the person — accept the impersonation risk
     # consciously before flipping this.
     meeting_memory_trust_display_names: bool = False
+    # ── Slice 3: bounded growth (spec §9, owner-ratified 12 months) ──
+    # Full-text recall window: meetings older than this go COLD — chunks and
+    # embeddings deleted, the structured row (dates/attendees/decisions)
+    # kept forever. 0 disables the age tier.
+    meeting_memory_retention_days: int = 365
+    # Per-org cap on full-text (chunked) meetings — over cap, oldest go cold.
+    meeting_memory_max_docs: int = 5000
+    # Per-series (same meeting link) fold: beyond `cap` meetings, only the
+    # newest `keep` stay individually chunked; the folded tail is replaced by
+    # ONE deterministic series-digest chunk on the newest folded meeting.
+    meeting_memory_series_cap: int = 200
+    meeting_memory_series_keep: int = 20
 
     # ── Asana (project system of record — see docs/ASANA.md) ──
     # Personal Access Token for the workspace, single-tenant fallback: a per-org

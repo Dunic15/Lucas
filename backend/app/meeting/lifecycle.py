@@ -30,6 +30,10 @@ from ..openclaw import runtime as openclaw_runtime
 
 _BOT_TERMINAL = {"call_ended", "done", "fatal"}
 
+# Strong refs for fire-and-forget memory tasks (compaction) — an unreferenced
+# asyncio task can be garbage-collected before it runs.
+_memory_tasks: set = set()
+
 
 _finalizing: set[str] = set()
 
@@ -1314,6 +1318,16 @@ async def _finalize_session_locked(
             run_in_threadpool(meeting_memory.deposit, session, artifact),
             timeout=10.0,
         )
+        # Bounded growth (Slice 3): compaction rides behind deposits — daily
+        # per-org throttle inside maybe_compact, fire-and-forget, never on
+        # the finalize response path. STRONG-REF'd: an unreferenced task can
+        # be GC'd before it runs (the 2026-07-25 leave_meeting incident —
+        # see api/voice_agent._leave_tasks).
+        _compact_task = asyncio.create_task(
+            run_in_threadpool(meeting_memory.maybe_compact, session.org_id)
+        )
+        _memory_tasks.add(_compact_task)
+        _compact_task.add_done_callback(_memory_tasks.discard)
     except Exception:
         pass
     openclaw_started = False

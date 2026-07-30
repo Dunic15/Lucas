@@ -77,3 +77,38 @@ async def org_memory_visibility(request: Request) -> JSONResponse:
     return JSONResponse(
         res, status_code=200 if res.get("ok") else 400, headers=_NO_STORE
     )
+
+
+@router.post("/org/memory/forget")
+async def org_memory_forget(request: Request) -> JSONResponse:
+    """'Forget this meeting' — removes it from EVERY retrieval path (chunks,
+    edges, attendees, grants, digest cache) and tombstones the row."""
+    if not meeting_memory.enabled():
+        return _disabled()
+    err, org = await _org_gate(request)
+    if err:
+        return err
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    res = await run_in_threadpool(
+        meeting_memory.forget, org, str((body or {}).get("bot_id") or "")
+    )
+    return JSONResponse(
+        res, status_code=200 if res.get("ok") else 400, headers=_NO_STORE
+    )
+
+
+@router.get("/org/memory/summary")
+async def org_memory_summary(request: Request) -> JSONResponse:
+    """'What the brain remembers' — counts + recent distilled projection."""
+    if not meeting_memory.enabled():
+        return _disabled()
+    err, org = await _org_gate(request)
+    if err:
+        return err
+    res = await run_in_threadpool(meeting_memory.org_summary, org)
+    return JSONResponse(
+        res, status_code=200 if res.get("ok") else 400, headers=_NO_STORE
+    )
