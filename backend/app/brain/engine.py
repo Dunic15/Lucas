@@ -1286,19 +1286,33 @@ ROLLING_SUMMARY_SYSTEM = """You maintain running notes of a live work meeting \
 for an assistant who is in the room. Merge the existing notes with the new \
 transcript lines into ONE updated set of notes, at most 120 words. Keep only \
 what stays useful later: topics discussed, decisions, owners, deadlines, \
-numbers, blockers, and open questions. Drop small talk and filler. Plain \
+numbers, blockers, and open questions. When a new line clearly relates to \
+something in the past-week context (if provided), note the link in one short \
+clause (what, when). Drop small talk and filler. Plain \
 text, no markdown, no preamble — return the updated notes only."""
 
 
-def rolling_summary(avatar: Avatar, prior: str, new_lines: str) -> str:
+def rolling_summary(
+    avatar: Avatar, prior: str, new_lines: str, context: str = ""
+) -> str:
     """Fold new transcript lines into the running notes. Returns the updated
-    notes, or "" on stub/error (the caller then keeps the old notes)."""
+    notes, or "" on stub/error (the caller then keeps the old notes).
+    `context` is the past-week memory digest (Meeting Memory) — reference
+    material for linking "now" to "last week"; the 120-word cap is unchanged
+    so the live prompt never grows."""
     if _is_stub():
         return ""  # keyless demo: no model — the recent-history window suffices
     try:
+        ctx_block = (
+            f"Past-week context (reference only, do not copy):\n"
+            f"{context.strip()}\n\n"
+            if (context or "").strip()
+            else ""
+        )
         raw = llm.complete(
             ROLLING_SUMMARY_SYSTEM,
             (
+                f"{ctx_block}"
                 f"Existing notes:\n{prior.strip() or '(none yet)'}\n\n"
                 f"New transcript lines:\n{new_lines}\n\n"
                 "Updated notes:"

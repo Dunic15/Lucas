@@ -5,10 +5,18 @@ Status: **spec accepted; Slice 1 in build** (2026-07-30). Owner intent captured
 Companions: `ARCHITECTURE.md` (D1–D8), `RISKS-AND-MILESTONES.md`, `CONTRACTS.md`,
 `THREAT-MODEL.md`, `docs/product/LAURA-COMPANY-BRAIN-SKILLS-BROWSER-ROADMAP.md`.
 
-Everything here is **behind a flag** (`MEETING_MEMORY_ENABLED`, default `false`)
-and, for the graph/retrieval half, additionally behind `knowledge.enabled()`
-(`COMPANY_BRAIN_ENABLED` **and** a configured control plane). The key-free demo
-never touches any of it; the live-meeting contract is untouched.
+Everything here is **behind a flag** (`MEETING_MEMORY_ENABLED`, default
+`false`) plus a configured control plane (`LAURA_DATABASE_URL`). As built the
+plane is self-contained (see the Slice-2 "As built" note in §10) — it does
+NOT require `COMPANY_BRAIN_ENABLED`. The key-free demo never touches any of
+it; the live-meeting contract is untouched.
+
+> **Identity-trust addendum (red team, 2026-07-30):** display names are
+> client-controlled (a Zoom rename), so by default only email-backed
+> identities count toward the all-attendees rule — a display-name-only room
+> narrows to org-public + admin grants. `MEETING_MEMORY_TRUST_DISPLAY_NAMES`
+> is the explicit, documented opt-in that restores name-based trust for
+> closed internal deployments.
 
 ✦ **Owner-ratified (2026-07-30):**
 - Build **Slice 1 only** first; self-audit + code review; then ask the owner
@@ -447,6 +455,19 @@ as `carryover_brief` today).
 - Flag off ⇒ byte-identical behaviour (inertness test, M2 style).
 
 ### NEXT — Slice 2: "Deep recall + the actual graph"
+
+> **As built (2026-07-30):** Slice 2 is SELF-CONTAINED in the memory plane —
+> `memory_chunks` (FTS + provider-stamped embeddings) instead of
+> meeting-as-`knowledge_documents`. Deviation from principle §4.4, on purpose:
+> (a) the ratified ALL-attendees rule cannot be expressed by the knowledge
+> ACL's `EXISTS` predicate (that would be the rejected union rule); (b) this
+> deployment's upstream is at M1 (no `retrieval.py`/ACL plane to reuse); and
+> (c) self-containment keeps meeting content out of `chunks_for_avatar` /
+> the avatar file index by construction, with no CHECK-widening of
+> `knowledge_sources.kind` needed. Migration `0025_meeting_memory_graph`:
+> `memory_chunks`, `memory_edges`, `memory_grants`,
+> `memory_meetings.visibility`. Admin surface: `POST /org/memory/grant`,
+> `POST /org/memory/visibility` (machine door, 404 when off).
 
 Meeting-as-document into the knowledge plane (`kind='meeting'` source, chunks,
 embeddings, ACL rows, staleness exemption) · `memory_entities`/`memory_edges`

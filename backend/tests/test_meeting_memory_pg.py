@@ -33,6 +33,9 @@ APP_ROLE = "laura_app"
 SENTINEL = "UTTERANCE-SENTINEL-NEVER-STORED"
 _MEMORY_TABLES = (
     "memory_attendees",
+    "memory_chunks",
+    "memory_edges",
+    "memory_grants",
     "memory_digests",
     "memory_meetings",
     "memory_entities",

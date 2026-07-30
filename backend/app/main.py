@@ -344,6 +344,8 @@ app = FastAPI(title="Callable AI Process Avatar", lifespan=_lifespan)
 security.install(app)
 app.include_router(tts.router)  # POST /tts (open-source avatar voice)
 app.include_router(org_api.router)  # /org/* — org-memory seam for surfaces (#48)
+from .memory import router as memory_router  # noqa: E402
+app.include_router(memory_router.router)  # /org/memory/* — meeting-memory admin (404 when off)
 app.include_router(auth.router)  # /auth/* — dashboard login (Google Sign-In)
 app.include_router(billing.router)  # /billing/* + signed /webhooks/stripe
 app.include_router(dashboard.router)  # /dashboard — owner control view
@@ -1452,7 +1454,8 @@ async def _refresh_rolling_summary(
             return
         text = "\n".join(f"{u.speaker}: {u.text}" for u in lines)
         notes = await run_in_threadpool(
-            rolling_summary, avatar, session.rolling_summary, text
+            rolling_summary, avatar, session.rolling_summary, text,
+            getattr(session, "week_digest", "") or "",
         )
         if notes:
             session.rolling_summary = notes
@@ -3936,6 +3939,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
         except Exception:  # noqa: BLE001 — best-effort, incl. TimeoutError
             week = ""
         if week:
+            session.week_digest = week
             rebuilt = (
                 "[Last 7 days — what the company discussed and decided, "
                 f"distilled from past meetings with dates]\n{week}\n\n"

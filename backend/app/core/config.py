@@ -456,6 +456,18 @@ class Settings(BaseSettings):
     # The digest rides in EVERY live turn's prompt — bytes are first-token
     # latency, so the text is hard-truncated to this length.
     meeting_memory_digest_max_chars: int = 1200
+    # Hard bound on the meeting_memory_search SQL (statement_timeout) — the
+    # tool answers with an honest failure string instead of blocking a turn.
+    meeting_memory_search_timeout_seconds: float = 1.5
+    # AUTHORIZATION identity trust (spec §7). Recall participants carry only
+    # a CLIENT-CONTROLLED display name — anyone can rename themselves to
+    # "Dana Fox" in Zoom. Default False: only email-verified participants
+    # count toward the all-attendees rule, so a display-name-only room
+    # narrows to org-public + admin grants (fails closed). True is an
+    # explicit deployment opt-in for trusted internal tenants: display-name
+    # matches then count as the person — accept the impersonation risk
+    # consciously before flipping this.
+    meeting_memory_trust_display_names: bool = False
 
     # ── Asana (project system of record — see docs/ASANA.md) ──
     # Personal Access Token for the workspace, single-tenant fallback: a per-org

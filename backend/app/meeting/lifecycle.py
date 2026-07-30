@@ -682,6 +682,10 @@ async def _start_avatar_session(
         # Prepended last so the freshest context (this week, across ALL
         # meeting links) reads first. Digest is hard-capped at
         # meeting_memory_digest_max_chars — this block rides in every turn.
+        # Kept separately on the session too: the rolling-summary refresher
+        # passes it as linking context (Slice 2), and a restart re-reads it
+        # via cached_digest.
+        session.week_digest = week
         session.memory_brief = (
             "[Last 7 days — what the company discussed and decided, "
             f"distilled from past meetings with dates]\n{week}\n\n"

@@ -1187,6 +1187,42 @@ ASANA_TOOL_SPECS = [
 ]
 
 
+def meeting_memory_search(query: str = "", session=None) -> str:
+    """Deep recall over ACCUMULATED meeting memory (Meeting Memory Slice 2).
+    Gate re-checked at dispatch time (never trust the spec list alone); the
+    module enforces the all-attendees visibility rule internally."""
+    from ..memory import meeting_memory
+
+    if not meeting_memory.enabled():
+        return "meeting memory is not enabled for this deployment"
+    return meeting_memory.search(query, session)
+
+
+MEETING_MEMORY_TOOL_SPEC = {
+    "type": "function",
+    "function": {
+        "name": "meeting_memory_search",
+        "description": (
+            "Search the company's accumulated memory of PAST meetings "
+            "(older than this week's brief): decisions, actions, who "
+            "attended, when. Use when someone asks 'didn't we decide…', "
+            "'when did we discuss…', or about an older meeting. Results "
+            "only include meetings the current room may see."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "What to recall (topic, decision, person).",
+                }
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+
 _DISPATCH = {
     "calculator": calculator,
     "date_math": date_math,
@@ -1198,13 +1234,14 @@ _DISPATCH = {
     "asana_projects": asana_projects,
     "asana_tasks": asana_tasks,
     "asana_search": asana_search,
+    "meeting_memory_search": meeting_memory_search,
 }
 
 # Tools that receive the live session (to capture onto it). Everything else
 # keeps its plain signature — the session seam is strictly additive.
 _SESSION_TOOLS = {
     "queue_action", "list_capabilities", "search_tools", "upcoming_meetings",
-    "asana_projects", "asana_tasks", "asana_search",
+    "asana_projects", "asana_tasks", "asana_search", "meeting_memory_search",
 }
 
 
@@ -1219,6 +1256,20 @@ def specs_for(session, *, live: bool = True) -> list[dict]:
     # org has Asana connected and the avatar may use it (session.asana_live).
     if session is not None and getattr(session, "asana_live", False):
         specs += ASANA_TOOL_SPECS
+    # Deep recall over accumulated meeting memory: offered only when the
+    # feature is on (flag + control plane) AND this session's org is a
+    # durable tenant (a personal u_<hash> org has no memory rows — offering
+    # the tool would only waste a model round-trip). The tool body re-checks
+    # the gate at dispatch time (M2 rule: gate twice, spec AND dispatch).
+    from ..memory import meeting_memory as _mm
+
+    if _mm.enabled():
+        from .. import control_plane as _cp
+
+        if _cp.is_durable_org(
+            str(getattr(session, "org_id", "") or "") if session else ""
+        ):
+            specs.append(MEETING_MEMORY_TOOL_SPEC)
     reg = getattr(session, "tool_registry", None) if session else None
     mcp_tools = reg.get("cedric_mcp") if isinstance(reg, dict) else None
     if mcp_tools:

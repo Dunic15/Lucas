@@ -258,7 +258,7 @@ def test_rolling_summary_receives_human_evidence_only(tmp_path, monkeypatch):
     monkeypatch.setattr(
         main,
         "rolling_summary",
-        lambda _avatar, _previous, text: seen.append(text) or "notes",
+        lambda _avatar, _previous, text, _context="": seen.append(text) or "notes",
     )
 
     asyncio.run(main._refresh_rolling_summary(session, avatar))
