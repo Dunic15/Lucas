@@ -187,3 +187,17 @@ def test_stream_prompt_name_is_parameterized_and_byte_identical_for_laura():
     assert "You are Laura," in system
     renamed = brain.ANSWER_STREAM_SYSTEM.format(persona="P", name="Ava")
     assert "You are Ava," in renamed and "You are Laura," not in renamed
+
+
+# ── face is repo-owned (owner 2026-07-30) ───────────────────────────────────
+def test_overlay_face_ignored_by_default(monkeypatch):
+    """A stale published overlay face must NOT override avatar.yaml at
+    dispatch: the repo owns the face. The override only applies when
+    OVERLAY_FACE_ENABLED is explicitly turned on."""
+    canonical = _laura()
+    row = {"overlay": {"face": "talk"}, "version": 3}
+    resolved = avatar_resolver._apply(canonical, "org-x", row)
+    assert resolved.face == canonical.face  # yaml wins ("tile" today)
+    monkeypatch.setattr(settings, "overlay_face_enabled", True)
+    resolved = avatar_resolver._apply(canonical, "org-x", row)
+    assert resolved.face == "talk"  # explicit opt-in restores the override

@@ -121,7 +121,12 @@ def _apply(canonical: Avatar, org_id: str, overlay_row: dict,
         kwargs["mission"] = overlay["mission"]
     if overlay.get("voice_id"):
         kwargs["elevenlabs_voice_id"] = overlay["voice_id"]
-    if overlay.get("face"):
+    # Face is REPO-OWNED (owner 2026-07-30): a stale org overlay published
+    # before the tile tier existed kept pinning bots to the old 3D head even
+    # after avatar.yaml changed — the owner flips faces by editing the repo,
+    # so the yaml must win. The dashboard face override stays in the schema
+    # but only applies when explicitly re-enabled (OVERLAY_FACE_ENABLED=true).
+    if overlay.get("face") and settings.overlay_face_enabled:
         kwargs["face"] = overlay["face"]
     if overlay.get("talk_body"):
         kwargs["talk_body"] = overlay["talk_body"]

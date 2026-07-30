@@ -253,6 +253,12 @@ class Settings(BaseSettings):
     # AVATAR_PAGE=avatar to use the paid Anam face. Both pages use the same
     # {type:"speak"} ws contract, so switching is env-only, no code change.
     avatar_page: str = "talk"
+    # Whether an org's PUBLISHED dashboard overlay may override the avatar's
+    # face tier at dispatch. Default OFF (owner 2026-07-30): the repo's
+    # avatar.yaml owns the face — a stale overlay published before a new tier
+    # existed was silently pinning bots to an old face after the yaml changed.
+    # Flip to true to restore the per-org dashboard face override.
+    overlay_face_enabled: bool = False
 
     # Behaviour
     wake_words: str = "laura"
