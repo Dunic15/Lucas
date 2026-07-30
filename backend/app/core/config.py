@@ -260,6 +260,19 @@ class Settings(BaseSettings):
     # NATIVE_EXECUTOR=false to fall back to the Cedric-brokered path.
     # See backend/app/executor.py + google_client.py.
     native_executor: bool = True
+    # OpenClaw action route (dev): with this ON, every approved action the
+    # executor handles is performed by the local OpenClaw gateway agent (and
+    # its connected tools) instead of the in-process vendor clients — the
+    # first slice of "all avatar actions run through OpenClaw". Receipts land
+    # on the SAME ledger provenance channel (route "openclaw"), so approve
+    # doors and the dashboard are unchanged. Default OFF: prod and the
+    # key-free demo never shell out. Needs a running local gateway
+    # (`openclaw gateway status`) and a model-authed agent. See
+    # backend/app/actions/openclaw_executor.py.
+    openclaw_executor: bool = False
+    openclaw_bin: str = "openclaw"      # CLI that reaches the gateway
+    openclaw_agent_id: str = "main"
+    openclaw_timeout_s: float = 180.0   # per-action agent budget (finalize path only)
     # Canonical Action plane (M0): approve doors answer immediately with an
     # observable 'executing' status and the native vendor call settles
     # done/failed from a worker thread. Default OFF — with it off the doors

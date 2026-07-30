@@ -23,7 +23,7 @@ Fields may also be inlined alongside ``type`` instead of nested.
 """
 from __future__ import annotations
 
-from . import ledger
+from . import ledger, openclaw_executor
 from ..integrations import asana_client, google_client
 from ..config import settings
 
@@ -44,6 +44,16 @@ _CAPABILITY_FAMILY = {
     ASANA_CREATE: "asana",
     ASANA_UPDATE: "asana",
     ASANA_COMMENT: "asana",
+}
+
+# Ledger-receipt noun per action type (the native branches set these inline;
+# the OpenClaw route needs the same nouns without running those branches).
+_WHAT = {
+    CALENDAR_CREATE: "calendar event",
+    EMAIL_SEND: "email",
+    ASANA_CREATE: "asana task",
+    ASANA_UPDATE: "asana task update",
+    ASANA_COMMENT: "asana comment",
 }
 
 
@@ -71,8 +81,9 @@ def from_typed(typed: dict | None) -> dict | None:
 
 
 def enabled() -> bool:
-    """Whether native execution is active (the flag is the single switch)."""
-    return bool(settings.native_executor)
+    """Whether execution is active — natively or routed through OpenClaw
+    (either flag opens the approve doors' execute branch)."""
+    return bool(settings.native_executor or openclaw_executor.enabled())
 
 
 def handles(action: dict | None) -> bool:
@@ -95,9 +106,17 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
     org = (org_id or "").strip()
     if not org:
         return {"ok": False, "error": "missing org"}
+    aid = (action_id or "").strip()
+    # Route: with the OpenClaw flag on, EVERY handled action goes through the
+    # local OpenClaw gateway agent (dev action plane); otherwise the native
+    # vendor clients run in-process. Same ledger provenance either way.
+    route = "openclaw" if openclaw_executor.enabled() else "native"
 
     try:
-        if atype == CALENDAR_CREATE:
+        if route == "openclaw":
+            result = openclaw_executor.run(org, aid, action)
+            what, receipt = _WHAT.get(atype, atype), result.get("receipt") or ""
+        elif atype == CALENDAR_CREATE:
             result = google_client.create_calendar_event(
                 org, action.get("event") or action
             )
@@ -128,17 +147,16 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
 
     # Write provenance back through the existing status weld point: "done" closes
     # the ledger row and shows a receipt in the dashboard; "failed" surfaces why.
-    aid = (action_id or "").strip()
     if aid:
         try:
             if result.get("ok"):
-                detail = " · ".join(p for p in ("native", what, receipt) if p)[:300]
+                detail = " · ".join(p for p in (route, what, receipt) if p)[:300]
                 ledger.set_action_status(
                     aid, "done", detail, org_id=org,
-                    receipt={"kind": what, "ref": receipt, "route": "native"},
+                    receipt={"kind": what, "ref": receipt, "route": route},
                 )
             else:
-                detail = f"native · {result.get('error', 'failed')}"[:300]
+                detail = f"{route} · {result.get('error', 'failed')}"[:300]
                 ledger.set_action_status(aid, "failed", detail, org_id=org)
         except Exception as e:  # noqa: BLE001 — provenance is best-effort
             print(
