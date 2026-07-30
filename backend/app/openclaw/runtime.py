@@ -3571,6 +3571,14 @@ def run_tool(capability_token: str, tool_name: str, request: dict) -> dict:
     # exactly-once execution claim, so it is the one gate for writing.
     context = _run_action_context(org_id, action_id) or {}
     if str(context.get("status") or "") != "running":
+        # Leave a trace. A gateway asking to write an unapproved action is
+        # either a bug in the gateway or something probing the boundary, and a
+        # bare 403 records neither. Not operator-visible today — the dashboard
+        # reads only run.status — so this is a forensic artifact on run_detail
+        # and whatever gets built on it later.
+        _event(org_id, run_id, "tool_rejected",
+               "Refused a side-effect tool for an unapproved action",
+               action_id=action_id, tool=tool, status="needs_attention")
         return {
             "ok": False,
             "status": 403,
