@@ -6,6 +6,9 @@ import platform
 import time
 
 from fastapi import APIRouter, Request
+
+# Bumped manually with any deploy whose arrival must be externally visible.
+BUILD_MARK = "2026-07-30-repo-owned-face"
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
@@ -49,6 +52,13 @@ def health() -> dict:
         "brain_model": settings.brain_model,
         "embedding_provider": settings.embedding_provider,
         "avatars": avatars.list_ids(),
+        # Deploy observability (2026-07-30): App Runner rolls silently and the
+        # revision is otherwise invisible from outside — bump BUILD_MARK with
+        # any change whose arrival you need to SEE. faces = the canonical
+        # (repo-yaml) face per avatar as THIS build resolves it, so "which
+        # look will a fresh bot wear" is one curl, not a live meeting.
+        "build": BUILD_MARK,
+        "faces": {aid: avatars.load(aid).page for aid in avatars.list_ids()},
     }
 
 
