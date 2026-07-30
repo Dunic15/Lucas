@@ -320,6 +320,13 @@ def test_tool_bridge_replays_duplicate_side_effect(active_openclaw, monkeypatch)
         "args": {"to": ["a@b.com"], "subject": "S", "body": "B"},
     }
 
+    # run_tool enforces the approval boundary itself. Without approving first
+    # this test would be asserting that an UNAPPROVED action reaches the
+    # vendor — which is the hole the boundary now closes.
+    assert runtime.approve_action(
+        active_openclaw, "oc_tool", start=False
+    )["ok"] is True
+
     first = runtime.run_tool(f"Bearer {token}", "gmail_send", body)
     second = runtime.run_tool(f"Bearer {token}", "gmail_send", body)
 
@@ -353,6 +360,12 @@ def test_tool_bridge_replays_action_with_a_different_step_id(
             "route": "openclaw",
         },
     )
+
+    # The approval boundary is enforced inside run_tool, so approve before
+    # exercising the exactly-once behaviour this test is actually about.
+    assert runtime.approve_action(
+        active_openclaw, "oc_action_once", start=False
+    )["ok"] is True
 
     first = runtime.run_tool(
         token,

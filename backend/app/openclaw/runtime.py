@@ -3139,6 +3139,41 @@ def _tool_existing(org_id: str, run_id: str, action_id: str,
     return dict(row) if row else None
 
 
+def _action_run_status(org_id: str, run_id: str, action_id: str) -> str:
+    """Stored lifecycle status of one action inside a run ("" when absent).
+
+    run_tool reads this to enforce the approval boundary SERVER-SIDE. The
+    approved-action enum and the filtered plan handed to the gateway are only
+    prompt data — a gateway is free to ignore both — so approval has to be
+    re-checked here, at the point the side effect would actually happen.
+    """
+    if _pg(org_id):
+        engine = control_plane._get_engine()
+        with engine.begin() as conn:
+            control_plane._set_org(conn, org_id)
+            row = _pg_fetchone(
+                conn,
+                """
+                SELECT status FROM openclaw_action_runs
+                WHERE org_id=:org_id AND run_id=:run_id
+                  AND action_id=:action_id
+                LIMIT 1
+                """,
+                {"org_id": org_id, "run_id": run_id, "action_id": action_id},
+            )
+        return str((row or {}).get("status") or "")
+    _ensure_sqlite_schema()
+    with store._LOCK, store._connect() as conn:
+        row = conn.execute(
+            """
+            SELECT status FROM openclaw_action_runs
+            WHERE org_id=? AND run_id=? AND action_id=? LIMIT 1
+            """,
+            (org_id, run_id, action_id),
+        ).fetchone()
+    return str(dict(row).get("status") or "") if row else ""
+
+
 def _tool_existing_for_action(
     org_id: str, run_id: str, action_id: str
 ) -> dict | None:
@@ -3386,7 +3421,25 @@ def run_tool(capability_token: str, tool_name: str, request: dict) -> dict:
     )
     existing = _tool_existing_for_action(org_id, run_id, action_id)
     if existing is not None:
+        # Replay of a call that already happened: return the recorded row.
+        # No new side effect, so this needs no fresh approval — and it must
+        # keep working after the action reaches a terminal state.
         return _shape_tool_row(existing)
+    # THE APPROVAL BOUNDARY, checked immediately before the FIRST execution.
+    # Membership of the run is not consent: the approved-action enum and the
+    # filtered plan handed to the gateway are prompt data, and a gateway that
+    # ignores them could otherwise drive a vendor write nobody approved.
+    # approve_action moves the row to 'running' as it records the decision and
+    # takes the ledger claim, so anything else has not been approved.
+    if _action_run_status(org_id, run_id, action_id) != "running":
+        _event(org_id, run_id, "tool_rejected",
+               "Refused a side-effect tool for an unapproved action",
+               action_id=action_id, tool=tool, status="needs_attention")
+        return {
+            "ok": False,
+            "status": 403,
+            "error": "action has not been approved for execution",
+        }
     inserted = _insert_tool_call(
         org_id, run_id, action_id, step_id, tool, body
     )
