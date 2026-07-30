@@ -337,6 +337,21 @@ class Settings(BaseSettings):
     # and lets large tenants share the worker fairly).
     knowledge_sync_max_pages_per_run: int = 20
 
+    # ── Meeting Memory (accumulating cross-meeting brain — Slice 1) ──
+    # docs/company-brain/MEETING-MEMORY-SPEC.md. Master switch; also needs the
+    # RLS control plane (LAURA_DATABASE_URL) — flag-off or key-free keeps every
+    # surface byte-identical, exactly like COMPANY_BRAIN_ENABLED.
+    meeting_memory_enabled: bool = False
+    # One digest LLM call per (org, avatar) per TTL window — every join inside
+    # the window is a single-row cache read.
+    meeting_memory_digest_ttl_seconds: int = 1800
+    # Hard cap on building the week digest at session start (join path is
+    # best-effort; on timeout the deterministic no-model fallback is used).
+    meeting_memory_brief_timeout_seconds: float = 6.0
+    # The digest rides in EVERY live turn's prompt — bytes are first-token
+    # latency, so the text is hard-truncated to this length.
+    meeting_memory_digest_max_chars: int = 1200
+
     # ── Asana (project system of record — see docs/ASANA.md) ──
     # Personal Access Token for the workspace, single-tenant fallback: a per-org
     # token stored via store.set_org_oauth(org, pat, provider="asana") wins.

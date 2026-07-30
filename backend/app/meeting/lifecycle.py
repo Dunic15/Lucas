@@ -27,6 +27,7 @@ from .. import ledger
 from .. import scheduler
 from .. import autopilot
 from .. import tool_registry
+from ..memory import meeting_memory
 from .. import gpu_runtime
 from .. import runpod_runtime
 from ..brain.engine import post_meeting, degraded_post_meeting, type_actions, semantic_action_duplicates
@@ -563,7 +564,7 @@ async def _start_avatar_session(
             org_id
         )
 
-    carryover, folder, asana_snapshot, reg, cal_brief, asana_live = await asyncio.gather(
+    carryover, folder, asana_snapshot, reg, cal_brief, asana_live, week = await asyncio.gather(
         _quiet(run_in_threadpool(ledger.carryover_brief, meeting_url, org_id=org_id)),
         _quiet(
             run_in_threadpool(drive_client.folder_brief, avatar.drive_folder_id)
@@ -574,6 +575,16 @@ async def _start_avatar_session(
         _quiet(run_in_threadpool(tool_registry.assemble, org_id, avatar)),
         _quiet(run_in_threadpool(google_client.calendar_brief, org_id)),
         _quiet(run_in_threadpool(_asana_live_sync)),
+        # week — the accumulated past-7-days memory digest (Meeting Memory
+        # Slice 1). Usually a single-row cache read; a regeneration is one
+        # fast-model call bounded by the timeout so a slow model can never
+        # delay bot dispatch (the whole entry stays best-effort via _quiet).
+        _quiet(
+            asyncio.wait_for(
+                run_in_threadpool(meeting_memory.week_brief, org_id, avatar.id),
+                timeout=settings.meeting_memory_brief_timeout_seconds,
+            )
+        ),
     )
     session.asana_live = bool(asana_live)
     session.memory_brief = carryover or ""
@@ -606,6 +617,15 @@ async def _start_avatar_session(
         session.calendar_brief = cal_brief
         session.memory_brief = (
             f"[Owner's calendar — upcoming meetings]\n{cal_brief}\n\n"
+            + (session.memory_brief or "")
+        )
+    if week:
+        # Prepended last so the freshest context (this week, across ALL
+        # meeting links) reads first. Digest is hard-capped at
+        # meeting_memory_digest_max_chars — this block rides in every turn.
+        session.memory_brief = (
+            "[Last 7 days — what the company discussed and decided, "
+            f"distilled from past meetings with dates]\n{week}\n\n"
             + (session.memory_brief or "")
         )
     if settings.autopilot_brief and session.memory_brief:
@@ -985,6 +1005,18 @@ async def _finalize_session_locked(
         await run_in_threadpool(
             ledger.record_meeting, session.meeting_url, session.avatar_id, bot_id,
             artifact, org_id=session.org_id,
+        )
+    except Exception:
+        pass
+    # Meeting Memory (Slice 1): deposit the DISTILLED fields into the durable
+    # memory tables while the roster is still on the session (participant rows
+    # are deleted by store.remove below). Same best-effort rule as the ledger,
+    # plus a hard bound: a HUNG control plane (vs an error) must not delay the
+    # session-removal/GPU-meter cleanup below.
+    try:
+        await asyncio.wait_for(
+            run_in_threadpool(meeting_memory.deposit, session, artifact),
+            timeout=10.0,
         )
     except Exception:
         pass
