@@ -273,6 +273,20 @@ class Settings(BaseSettings):
     openclaw_bin: str = "openclaw"      # CLI that reaches the gateway
     openclaw_agent_id: str = "main"
     openclaw_timeout_s: float = 180.0   # per-action agent budget (finalize path only)
+    # Pipedream Connect (the OpenClaw agent's breadth layer): one Connect
+    # project holds the org's app OAuth grants (~2,800 apps); the dashboard
+    # mints connect links against it and each connected app is synced into
+    # the local mcporter config as an MCP toolset for the agent. Credentials
+    # from env only (never in git); everything soft-fails when unset, so the
+    # key-free demo never notices. Environment "development" = Pipedream's
+    # free tier for tool calling — the dev action plane's home.
+    pipedream_project_id: str = ""
+    pipedream_client_id: str = ""
+    pipedream_client_secret: str = ""
+    pipedream_environment: str = "development"
+    pipedream_external_user_id: str = "laura-dev"
+    pipedream_mcp_wrapper: str = "~/.mcporter/pipedream-mcp.sh"
+    mcporter_config_path: str = "~/.mcporter/mcporter.json"
     # Canonical Action plane (M0): approve doors answer immediately with an
     # observable 'executing' status and the native vendor call settles
     # done/failed from a worker thread. Default OFF — with it off the doors

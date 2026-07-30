@@ -245,7 +245,7 @@ async def _lifespan(app: FastAPI):
         print("[gmail-watch] shutdown signal — watcher draining", flush=True)
 
 
-from .api import pages, granola, oauth, avatars_api, meetings, health, console, sessions  # extracted routes
+from .api import pages, granola, oauth, avatars_api, meetings, health, console, sessions, pipedream_connect  # extracted routes
 
 app = FastAPI(title="Callable AI Process Avatar", lifespan=_lifespan)
 # Production hardening: per-IP rate limiting on the public/expensive/unauth demo
@@ -269,6 +269,7 @@ app.include_router(meetings.router)  # /ledger, /meetings* (api/meetings.py)
 app.include_router(health.router)  # /health, /recall/status, /gmail/status ... (api/health.py)
 app.include_router(console.router)  # /, /demo/*, /live/* (api/console.py)
 app.include_router(sessions.router)  # /sessions/* (api/sessions.py)
+app.include_router(pipedream_connect.router)  # /dashboard/connections/pipedream/* (OpenClaw breadth layer)
 
 # Meeting-bound GPU runtime re-checks the live session count before it stops
 # the photoreal box (a new meeting may have started during the grace window).

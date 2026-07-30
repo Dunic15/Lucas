@@ -1982,6 +1982,57 @@
         :'<a class="btn primary" style="text-decoration:none" href="/oauth/google/connect">Connect</a>')+
       '</div></div>'+
       '';
+    // ── App Library (Pipedream) — the OpenClaw action plane's breadth layer.
+    // Server-gated: the endpoints 503 unless PIPEDREAM_* is configured, and the
+    // card only unhides on a good accounts response — prod dashboards without
+    // the dev action plane render byte-identical to today.
+    (function(){
+      $("#conns").insertAdjacentHTML("beforeend",
+        '<div class="conn" id="pd-card" hidden><div class="nm">🔌 App Library <span class="stchip" style="margin-left:6px">via Pipedream</span></div>'+
+        '<div class="ds">Connect any of 2,800+ apps once — every connection becomes a tool your avatars can use when executing approved actions.</div>'+
+        '<div id="pd-connected" style="display:flex;flex-wrap:wrap;gap:6px"></div>'+
+        '<div class="foot" style="gap:6px"><input id="pd-q" placeholder="Search apps (e.g. hubspot, linear, stripe)" style="flex:1;min-width:0"/><button class="btn" id="pd-search">Search</button></div>'+
+        '<div id="pd-results" class="conns-list"></div></div>');
+      function chips(accts){
+        $("#pd-connected").innerHTML = accts.map(function(a){
+          return '<span class="stchip'+(a.healthy?' connected':'')+'">'+esc(a.app_name||a.app)+'</span>';
+        }).join("")||'<span class="cnote">Nothing connected yet — search below.</span>';
+      }
+      // Listing accounts also triggers the server-side tool sync, so a reload
+      // after an OAuth completes is all it takes to arm the agent.
+      fetch("/dashboard/connections/pipedream/accounts",{headers:headers()})
+        .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+        .then(function(j){ if(!j.ok) throw 0; $("#pd-card").hidden=false; chips(j.accounts||[]); })
+        .catch(function(){ /* not configured — card stays hidden */ });
+      function pdSearch(){
+        var q=($("#pd-q").value||"").trim(); if(!q) return;
+        $("#pd-results").innerHTML='<div class="empty">Searching…</div>';
+        fetch("/dashboard/connections/pipedream/apps?q="+encodeURIComponent(q),{headers:headers()})
+          .then(function(r){ return r.json(); })
+          .then(function(j){
+            if(!j.ok) throw new Error(j.error||"Search failed");
+            $("#pd-results").innerHTML=(j.apps||[]).map(function(a){
+              return '<div class="frow"><div><div class="t">'+esc(a.name)+'</div><div class="h">'+esc(a.description||a.slug)+'</div></div>'+
+                '<button class="btn" data-pd-connect="'+esc(a.slug)+'">Connect</button></div>';
+            }).join("")||'<div class="empty">No apps matched.</div>';
+            $$("#pd-results [data-pd-connect]").forEach(function(b){b.addEventListener("click",function(){
+              b.disabled=true; b.textContent="Opening…";
+              fetch("/dashboard/connections/pipedream/connect",{method:"POST",headers:headers(),body:JSON.stringify({app:b.getAttribute("data-pd-connect")})})
+                .then(function(r){ return r.json(); })
+                .then(function(j){
+                  if(!j.ok) throw new Error(j.error||"Couldn't create the connect link");
+                  window.open(j.url,"_blank","noopener");
+                  toast("Authorize in the new tab, then reload this page — the app becomes an avatar tool automatically.");
+                  b.disabled=false; b.textContent="Connect"; })
+                .catch(function(e){ toast(e.message||"Couldn't create the connect link.",true);
+                  b.disabled=false; b.textContent="Connect"; });
+            });});
+          })
+          .catch(function(e){ $("#pd-results").innerHTML='<div class="empty">'+esc(e.message||"Search failed")+'</div>'; });
+      }
+      $("#pd-search").addEventListener("click",pdSearch);
+      $("#pd-q").addEventListener("keydown",function(e){ if(e.key==="Enter") pdSearch(); });
+    })();
     // Asana (native) connect — verify + store the pasted PAT server-side.
     $$("#conns [data-asana-on]").forEach(function(btn){btn.addEventListener("click",function(){
       var input=$("#asana-pat"), token=(input&&input.value||"").trim();
