@@ -125,13 +125,13 @@ voice_actions_mode: prepare_only
 min_confidence:
 speak_cooldown_seconds:
 
-# Identity-safe renderer assets. Cedric is back on the PLAIN 3D head (/talk),
-# rendering the same cedric.glb without the hologram treatment — owner call
-# 2026-07-28 after seeing the projection in a real meeting grid: next to tiles
-# of actual faces, a glowing head reads as a gimmick, and the dome on top of it
-# read as a ball. `face: robot` puts the hologram back (the /robot page, its
-# shader and its white studio are all still there, untouched).
-face: talk
+# Identity-safe renderer assets. Cedric wears the TILE face (owner 2026-07-30,
+# dev env): his profile picture in a circle — the Google-Meet camera-off look —
+# with a thin ring that ripples with his voice while he speaks. The portrait is
+# gpu/assets/portrait-cedric.jpg via /laura-reference.jpg?avatar_id=cedric.
+# History: `face: talk` = the plain 3D head (owner 2026-07-28: the hologram
+# read as a gimmick in a real grid); `face: robot` = the hologram, still there.
+face: tile
 face_fallback: photoreal
 talk_model: cedric.glb
 photoreal_reference: reference-cedric.jpg

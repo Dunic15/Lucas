@@ -1,0 +1,552 @@
+<!doctype html>
+<!--
+  /tile — the PROFILE-PICTURE face tier (owner ask 2026-07-30).
+
+  Exactly the Google-Meet "camera off" look: the avatar's portrait in a circle
+  on the white studio background, plus ONE living element — a thin ring around
+  the circle that ripples with the voice while the avatar speaks (reference:
+  the owner's Pinterest audio-visualizer pin, simplified to a single line).
+  Idle = calm thin ring. Speaking = the ring undulates with the real audio
+  amplitude. Hand raised = the ring pulses violet until the backend lowers it.
+  Interrupt = the ring collapses to idle immediately.
+
+  Same wire contract as /talk and /robot (the {type:"speak",text} messages,
+  /tts payloads, stop / raise_hand, SSE + poll, speaking reporter, mic
+  barge-in, ElevenLabs Agent voice chunks) — ONLY the renderer differs: no
+  three.js, no GLB, no visemes. The portrait comes from the identity-safe
+  /laura-reference.jpg?avatar_id=<id> route (curated portrait-<id>.jpg wins).
+
+  Opt an avatar in with `face: tile` in its avatar.yaml.
+
+  TESTING (through the backend — /tts and /live/act are backend routes):
+    uvicorn app.main:app → http://localhost:8000/tile?avatar_id=cedric
+    1. Portrait renders, ring idles.   2. Type + "Speak" → the ring ripples.
+    3. "Ask" → grounded answer.        4. 🎤 → talk, barge-in included.
+-->
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; height: 100%; background: #ffffff; }
+  /* White studio (owner call 2026-07-28, same as /robot): in a meeting grid
+     every other tile is a lit room — a clean white cyc sits next to real
+     webcams instead of fighting them. */
+  #stage {
+    position: fixed; inset: 0;
+    opacity: 0; transition: opacity .45s ease;
+    display: flex; align-items: center; justify-content: center;
+    background:
+      radial-gradient(52% 46% at 50% 42%, rgba(255,255,255,1) 0%, rgba(255,255,255,0) 74%),
+      linear-gradient(180deg, #ffffff 0%, #f7f8fa 58%, #eceef1 100%);
+  }
+  #stage.live { opacity: 1; }
+  #stage::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(120% 90% at 50% 42%, rgba(0,0,0,0) 62%, rgba(120,132,148,.13) 100%);
+  }
+  /* The ring canvas is the square stage the circle sits in; the portrait is
+     centered inside it. Sized in JS from the viewport. */
+  #wrap { position: relative; }
+  #ring { display: block; }
+  #portrait {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    border-radius: 50%; object-fit: cover;
+    box-shadow: 0 10px 40px rgba(60, 72, 90, .18);
+    background: #dfe3e9; /* skeleton while the jpg loads */
+  }
+  body.meeting #hud, body.meeting #status { display: none; }
+  #hud {
+    position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+    display: flex; gap: 8px; align-items: center; z-index: 10;
+    font: 14px/1.4 system-ui, sans-serif;
+  }
+  #hud input {
+    width: 320px; max-width: 60vw; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid #2a2f37; background: #171b21; color: #e8ecf1;
+  }
+  #hud button {
+    padding: 10px 14px; border-radius: 10px; border: 0; cursor: pointer;
+    background: #2f6df6; color: #fff; font-weight: 600;
+  }
+  #hud button.alt { background: #2a2f37; }
+  #status {
+    position: fixed; left: 14px; top: 12px; z-index: 10; color: #9aa4b1;
+    font: 12px/1.4 ui-monospace, monospace; background: #131720cc;
+    padding: 6px 10px; border-radius: 8px; max-width: 70vw;
+  }
+</style>
+
+<div id="stage">
+  <div id="wrap">
+    <canvas id="ring"></canvas>
+    <img id="portrait" alt="" />
+  </div>
+</div>
+<div id="status">loading…</div>
+<div id="hud">
+  <input id="q" placeholder="Type something for the avatar to say…" />
+  <button id="speakBtn">Speak</button>
+  <button id="askBtn" class="alt">Ask (grounded + acts)</button>
+  <button id="micBtn" class="alt" title="Talk to the avatar by voice">🎤 Talk</button>
+</div>
+
+<script>
+  const params = new URLSearchParams(location.search);
+  const avatarId = params.get("avatar_id") || "cedric";
+  const status = (t) => (document.getElementById("status").textContent = t);
+
+  // ── speech state (same names/semantics as /robot so the meeting block and
+  //    the reporter below are drop-in) ───────────────────────────────────────
+  let activeSource = null;      // BufferSource currently playing
+  let _pendingSay = 0;          // sentences accepted, not yet finished playing
+  let _sayGen = 0;              // bumped on interrupt: older queued speech drops
+  let _sayChain = Promise.resolve();
+  let speakingUntil = 0;        // performance.now() horizon of queued audio
+  let herText = "";             // normalized text she's saying (echo filter)
+  let _thinking = false;
+  let _askController = null;
+  let handRaised = false;
+  let interruptedAt = -1e9;
+  let agentLive = [];           // ElevenLabs Agent chunks currently scheduled
+  let _ctx = null, analyser = null, freq = null;  // lazy AudioContext (see ctx())
+
+  // ── portrait + ring layout ───────────────────────────────────────────────
+  const stage = document.getElementById("stage");
+  const wrap = document.getElementById("wrap");
+  const ringEl = document.getElementById("ring");
+  const portrait = document.getElementById("portrait");
+  const rctx = ringEl.getContext("2d");
+  // Identity-safe portrait route: curated portrait-<id>.jpg wins, then the
+  // avatar's own photoreal reference; never another avatar's face.
+  portrait.src = `/laura-reference.jpg?avatar_id=${encodeURIComponent(avatarId)}`;
+
+  let SIZE = 0, RADIUS = 0, DPR = 1;
+  function layout() {
+    // The circle is the tile's hero, like a Meet no-video tile.
+    const d = Math.round(Math.min(innerHeight * 0.52, innerWidth * 0.44));
+    // Canvas square leaves head-room for the ring's ripple (max ~14% of r).
+    SIZE = Math.round(d * 1.42);
+    RADIUS = d / 2;
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    ringEl.width = SIZE * DPR; ringEl.height = SIZE * DPR;
+    ringEl.style.width = SIZE + "px"; ringEl.style.height = SIZE + "px";
+    portrait.style.width = d + "px"; portrait.style.height = d + "px";
+  }
+  layout();
+  addEventListener("resize", layout);
+
+  // Ring palette: calm slate at rest, the brand blue when the voice is live,
+  // violet pulse while the hand is raised (same semantic as /robot's tint).
+  const IDLE = { r: 176, g: 186, b: 199 };
+  const LIVE = { r: 47, g: 109, b: 246 };
+  const HAND = { r: 168, g: 110, b: 255 };
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const mix = (c1, c2, t) => ({ r: lerp(c1.r, c2.r, t), g: lerp(c1.g, c2.g, t), b: lerp(c1.b, c2.b, t) });
+
+  // ── the ring ─────────────────────────────────────────────────────────────
+  // One closed line around the portrait. Rest: a near-perfect circle with a
+  // slow breath. Speaking: low frequency bins push N control points outward,
+  // the whole waveform slowly orbits — the Pinterest look, one line's worth.
+  const POINTS = 96;
+  let smooth = new Float32Array(POINTS);  // per-point eased displacement
+  let level = 0;                          // eased 0..1 voice energy
+  let revealed = false;
+
+  function drawRing(t) {
+    const c = SIZE / 2;
+    rctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    rctx.clearRect(0, 0, SIZE, SIZE);
+
+    const speakingNow = !!activeSource || _pendingSay > 0 || agentLive.length > 0;
+    const justInterrupted = (performance.now() - interruptedAt) < 450;
+
+    // Real voice energy from the analyser (bins 1..8, like /robot's glow).
+    let target = 0;
+    if (analyser && speakingNow && !justInterrupted) {
+      analyser.getByteFrequencyData(freq);
+      for (let i = 1; i < 8; i++) target = Math.max(target, (freq[i] || 0) / 255);
+    }
+    level += (target - level) * 0.25;
+
+    const pulse = handRaised ? 0.5 + 0.5 * Math.sin(t * 6) : 0;
+    const col = mix(mix(IDLE, LIVE, Math.min(level * 2.2, 1)), HAND, pulse * 0.85);
+    const breath = 1 + 0.006 * Math.sin(t * 0.9);          // idle presence
+    const base = (RADIUS + Math.max(10, RADIUS * 0.055)) * breath;
+    const amp = RADIUS * 0.13 * level;                      // ripple height
+    const orbit = t * 0.9;                                  // slow rotation
+
+    rctx.beginPath();
+    for (let i = 0; i <= POINTS; i++) {
+      const k = i % POINTS;
+      const a = (k / POINTS) * Math.PI * 2;
+      // Two frequency bins per point, mirrored so the seam never shows, plus
+      // two slow sine waves so the line still swims between loud moments.
+      let disp = 0;
+      if (analyser) {
+        const half = k < POINTS / 2 ? k : POINTS - k;
+        const bin = 2 + (half % (freq.length - 4));
+        disp = ((freq[bin] || 0) / 255) * amp;
+      }
+      disp += amp * 0.35 * Math.sin(a * 5 + orbit * 2.1)
+            + amp * 0.25 * Math.sin(a * 9 - orbit * 3.3);
+      smooth[k] += (disp - smooth[k]) * 0.3;
+      const r = base + smooth[k] + pulse * 3;
+      const x = c + Math.cos(a + orbit * 0.12) * r;
+      const y = c + Math.sin(a + orbit * 0.12) * r;
+      i === 0 ? rctx.moveTo(x, y) : rctx.lineTo(x, y);
+    }
+    rctx.closePath();
+    rctx.lineWidth = 2 + 2.5 * level + pulse;
+    rctx.strokeStyle = `rgba(${col.r | 0}, ${col.g | 0}, ${col.b | 0}, ${0.55 + 0.45 * Math.max(level, pulse)})`;
+    rctx.lineJoin = "round";
+    rctx.stroke();
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+    drawRing(performance.now() / 1000);
+    if (!revealed) { revealed = true; stage.classList.add("live"); }
+  }
+  animate();
+  window.__tile = { get analyser() { return analyser; }, ctx: () => ctx() };
+
+  // ── audio: same /tts contract as /talk and /robot, through an analyser ───
+  function ctx() {
+    if (!_ctx) {
+      _ctx = new (window.AudioContext || window.webkitAudioContext)();
+      analyser = _ctx.createAnalyser();
+      analyser.fftSize = 64;
+      analyser.smoothingTimeConstant = 0.5;
+      freq = new Uint8Array(analyser.frequencyBinCount);
+      analyser.connect(_ctx.destination);
+    }
+    return _ctx;
+  }
+  const unlockAudio = () => { try { ctx().resume(); } catch (_) {} };
+  document.addEventListener("pointerdown", unlockAudio, { once: true });
+  document.addEventListener("keydown", unlockAudio, { once: true });
+
+  async function payloadToAudio(j) {
+    const bin = Uint8Array.from(atob(j.audio), (c) => c.charCodeAt(0));
+    const buffer = await ctx().decodeAudioData(bin.buffer);
+    return { buffer };
+  }
+  async function synthesize(text) {
+    const r = await fetch("/tts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text, avatar_id: avatarId }),
+    });
+    if (!r.ok) throw new Error("/tts not available yet (" + r.status + ")");
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    return payloadToAudio(j);
+  }
+
+  const _norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  function playAudio(a, text) {
+    return new Promise((resolve) => {
+      const src = ctx().createBufferSource();
+      src.buffer = a.buffer;
+      src.connect(analyser);
+      activeSource = src;
+      speakingUntil = Math.max(speakingUntil, performance.now()) + a.buffer.duration * 1000 + 300;
+      herText = _norm(text);
+      src.onended = () => { if (activeSource === src) activeSource = null; resolve(); };
+      src.start();
+    });
+  }
+  function interruptSpeech() {
+    _sayGen++;
+    _sayChain = Promise.resolve();
+    if (activeSource) { try { activeSource.stop(); } catch (_) {} activeSource = null; }
+    if (_askController) { try { _askController.abort(); } catch (_) {} }
+    _thinking = false;
+    interruptedAt = performance.now(); // the ring collapses to idle (drawRing)
+    speakingUntil = 0;
+    herText = "";
+    status("(interrupted — listening)");
+  }
+  window.interruptSpeech = interruptSpeech;
+  function say(text, pre) {
+    if (!text || !text.trim()) return _sayChain;
+    unlockAudio();
+    const synth = pre && pre.audio ? payloadToAudio(pre) : synthesize(text);
+    const gen = _sayGen;
+    _pendingSay++;
+    _sayChain = _sayChain.then(async () => {
+      try {
+        const a = await synth;
+        if (gen !== _sayGen) return; // interrupted while synthesizing — drop it
+        status("speaking: " + text.slice(0, 60));
+        await playAudio(a, text);
+      } catch (e) {
+        status("speak failed: " + (e?.message || e));
+        console.error(e);
+      } finally {
+        _pendingSay = Math.max(0, _pendingSay - 1);
+      }
+    });
+    return _sayChain;
+  }
+  window.speak = say;
+
+  // ── grounded answer that can ACT: /live/act SSE, spoken chunk by chunk ───
+  async function ask(question) {
+    interruptSpeech();
+    status("thinking…");
+    const ctrl = new AbortController();
+    _askController = ctrl;
+    _thinking = true;
+    const genAtStart = _sayGen;
+    let r;
+    try {
+      r = await fetch("/live/act", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ avatar_id: avatarId, question }),
+        signal: ctrl.signal,
+      });
+    } catch (e) {
+      if (ctrl === _askController) _thinking = false;
+      if (e && e.name === "AbortError") return;
+      status("ask failed: " + (e?.message || e));
+      return;
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "", saidAny = false;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done || ctrl.signal.aborted || _sayGen !== genAtStart) break;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n\n")) >= 0) {
+          const evt = buf.slice(0, nl); buf = buf.slice(nl + 2);
+          const m = evt.match(/^data: (\{.*\})$/m);
+          if (!m) continue;
+          let content; try { content = JSON.parse(m[1]).content; } catch { continue; }
+          if (content && !ctrl.signal.aborted && _sayGen === genAtStart) { say(content); saidAny = true; }
+        }
+      }
+    } catch (e) { if (!(e && e.name === "AbortError")) console.error(e); }
+    if (ctrl === _askController) _thinking = false;
+    if (!saidAny && !ctrl.signal.aborted) status("(stayed silent)");
+  }
+
+  document.getElementById("speakBtn").onclick = () => say(document.getElementById("q").value);
+  document.getElementById("askBtn").onclick = () => ask(document.getElementById("q").value);
+
+  // ── voice input: same mic/echo/stop-word engine as /talk and /robot ──────
+  const micBtn = document.getElementById("micBtn");
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let micOn = false, rec = null;
+  function looksLikeEcho(heard) {
+    const words = _norm(heard).split(" ").filter(Boolean);
+    if (!words.length) return true;
+    const his = new Set(herText.split(" ").filter(Boolean));
+    if (!his.size) return false;
+    return words.filter((w) => his.has(w)).length / words.length >= 0.5;
+  }
+  const STOP_PHRASES = ["give me a second", "give me a moment", "give me a minute", "give me a sec", "that s enough", "stop talking", "one second", "one moment", "one minute", "never mind", "nevermind", "forget it", "be quiet", "hold on", "hang on", "shut up", "stop it", "one sec",
+    "lascia stare", "lascia perdere", "non importa", "basta cos", "un attimo", "un secondo", "un momento"].sort((a, b) => b.length - a.length);
+  const STOP_WORDS = new Set(["stop", "wait", "pause", "quiet", "silence", "enough", "hush", "shush",
+    "aspetta", "fermati", "ferma", "zitto", "zitta", "basta", "taci", "silenzio", "smettila"]);
+  const POLITE_WORDS = new Set(["ok", "okay", "no", "hey", "please", "now", "just", "a", "one", "sec", "second", "moment", "minute", "thanks", "thank", "you",
+    "cedric", "cedrick", "sedric", "sedrik", "sedrick", "laura", "lara", "lora", "petra",
+    "per", "favore", "grazie", "un", "attimo", "secondo", "momento", "ora", "adesso", "ehi", "dai"]);
+  POLITE_WORDS.add(avatarId.toLowerCase());
+  function stopWordIn(h) {
+    for (const p of STOP_PHRASES) if (h.includes(p)) return p;
+    for (const w of h.split(" ")) if (STOP_WORDS.has(w)) return w;
+    return null;
+  }
+  function containsStopWord(heard) {
+    const w = stopWordIn(_norm(heard));
+    return !!w && !herText.includes(w);
+  }
+  function isStopCommand(heard) {
+    let h = _norm(heard);
+    if (!h || !containsStopWord(heard)) return false;
+    for (const p of STOP_PHRASES) h = h.split(p).join(" ");
+    return h.split(" ").filter(Boolean).every((w) => STOP_WORDS.has(w) || POLITE_WORDS.has(w));
+  }
+  if (!SR) {
+    micBtn.disabled = true;
+    micBtn.title = "Voice input needs Chrome/Edge (Web Speech API)";
+  } else {
+    rec = new SR();
+    rec.lang = "en-US";
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.onresult = (ev) => {
+      const res = ev.results[ev.results.length - 1];
+      const heard = (res[0] && res[0].transcript || "").trim();
+      if (!heard) return;
+      const heSpeaking = performance.now() < speakingUntil || !!activeSource;
+      if ((heSpeaking || _thinking) && isStopCommand(heard)) {
+        interruptSpeech();
+        status("(stopped — listening)");
+        return;
+      }
+      if (heSpeaking && looksLikeEcho(heard)) {
+        if (containsStopWord(heard)) interruptSpeech();
+        return;
+      }
+      if (heSpeaking) interruptSpeech();
+      if (!res.isFinal) { status("hearing: " + heard); return; }
+      if (isStopCommand(heard)) { status("(listening)"); return; }
+      document.getElementById("q").value = heard;
+      status("heard: " + heard);
+      ask(heard);
+    };
+    rec.onend = () => { if (micOn) { try { rec.start(); } catch (_) {} } };
+    rec.onerror = (e) => {
+      if (e.error === "not-allowed") { micOn = false; micBtn.textContent = "🎤 Talk"; status("mic blocked — allow microphone access"); }
+    };
+    micBtn.onclick = () => {
+      micOn = !micOn;
+      if (micOn) {
+        try { rec.start(); } catch (_) {}
+        micBtn.textContent = "🔴 Listening…";
+        micBtn.style.background = "#c0392b";
+        status("listening — talk to the avatar (say 'wait' to cut in)");
+      } else {
+        try { rec.stop(); } catch (_) {}
+        micBtn.textContent = "🎤 Talk";
+        micBtn.style.background = "";
+        status("mic off");
+      }
+    };
+  }
+
+  // ── Meeting mode: byte-compatible with talk.html's backend contract ──────
+  const conversationId = params.get("conversation_id");
+  if (conversationId) {
+    document.body.classList.add("meeting");
+    unlockAudio(); // the Recall bot browser never clicks
+
+    let staleBefore = -Infinity;
+    const genOf = (msg) => {
+      const g = msg.generation_id ?? msg.speech_generation_id ?? msg.generation;
+      return typeof g === "number" ? g : null;
+    };
+    const handleBackendMessage = (msg) => {
+      if (!msg) return;
+      if (msg.type === "speak" && msg.text) {
+        const g = genOf(msg);
+        if (g !== null && g <= staleBefore) return; // superseded by a stop
+        unlockAudio(); say(msg.text, msg);
+      } else if (msg.type === "stop") {
+        const g = genOf(msg);
+        if (g !== null) staleBefore = Math.max(staleBefore, g);
+        interruptSpeech();
+      } else if (msg.type === "raise_hand") {
+        handRaised = true;
+      } else if (msg.type === "lower_hand") {
+        handRaised = false;
+      }
+    };
+
+    // Path 1: SSE push (App Runner 403s WebSockets, streams SSE fine).
+    const es = new EventSource(`/avatar/stream/${encodeURIComponent(conversationId)}`);
+    es.onmessage = (ev) => {
+      try { handleBackendMessage(JSON.parse(ev.data)); } catch (_) { /* non-JSON */ }
+    };
+    // Path 2: slow poll as belt-and-braces; both drain the same queue.
+    const poll = async () => {
+      try {
+        const r = await fetch(`/avatar/messages/${encodeURIComponent(conversationId)}`,
+                              { cache: "no-store" });
+        if (r.ok) {
+          const data = await r.json();
+          for (const msg of data.messages || []) handleBackendMessage(msg);
+        }
+      } catch (_) { /* keep polling */ }
+      setTimeout(poll, 2000);
+    };
+    poll();
+
+    // ── ElevenLabs Agent voice: same block as /robot — the agent's pcm chunks
+    // route through the SAME analyser, so the ring ripples with the agent's
+    // voice with zero extra machinery. Pages without the params are inert.
+    const voiceWsBase = params.get("voice_ws");
+    const voiceCap = params.get("voice_cap");
+    if (voiceWsBase && voiceCap) {
+      let agentNextAt = 0;
+      const b64ToF32 = (b64) => {
+        const raw = atob(b64);
+        const n = raw.length >> 1;                 // s16le mono @16k
+        const f32 = new Float32Array(n);
+        for (let i = 0; i < n; i++) {
+          let v = raw.charCodeAt(2 * i) | (raw.charCodeAt(2 * i + 1) << 8);
+          if (v >= 0x8000) v -= 0x10000;
+          f32[i] = v / 32768;
+        }
+        return f32;
+      };
+      const flushAgentAudio = () => {
+        for (const s of agentLive) { try { s.stop(); } catch (_) {} }
+        agentLive = [];
+        agentNextAt = 0;
+      };
+      const playAgentChunk = (b64) => {
+        const f32 = b64ToF32(b64);
+        if (!f32.length) return;
+        const c = ctx();
+        const buf = c.createBuffer(1, f32.length, 16000); // the ctx resamples
+        buf.getChannelData(0).set(f32);
+        const src = c.createBufferSource();
+        src.buffer = buf;
+        src.connect(analyser);            // analyser -> destination, as /tts does
+        const t = Math.max(c.currentTime + 0.05, agentNextAt);
+        src.start(t);
+        agentNextAt = t + buf.duration;
+        agentLive.push(src);
+        src.onended = () => {
+          const i = agentLive.indexOf(src);
+          if (i >= 0) agentLive.splice(i, 1);
+        };
+        speakingUntil = Math.max(
+          speakingUntil,
+          performance.now() + (agentNextAt - c.currentTime) * 1000 + 150,
+        );
+      };
+      const _baseInterrupt = interruptSpeech;
+      interruptSpeech = function () { _baseInterrupt(); flushAgentAudio(); };
+      window.interruptSpeech = interruptSpeech;
+
+      let agentWs = null, agentRetry = 500;
+      const connectAgentVoice = () => {
+        let target;
+        try { target = voiceWsBase.replace(/^http/, "ws") + "/voice-out/" + encodeURIComponent(voiceCap); }
+        catch (_) { return; }
+        try { agentWs = new WebSocket(target); }
+        catch (_) { setTimeout(connectAgentVoice, agentRetry = Math.min(agentRetry * 2, 8000)); return; }
+        agentWs.onopen = () => { agentRetry = 500; };
+        agentWs.onmessage = (ev) => {
+          let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
+          if (m.type === "audio" && m.data) { unlockAudio(); playAgentChunk(m.data); }
+          else if (m.type === "interrupt") { try { interruptSpeech(); } catch (_) { flushAgentAudio(); } }
+          else if (m.type === "response_end") { /* audio already queued; let it finish */ }
+        };
+        agentWs.onclose = () => setTimeout(connectAgentVoice, agentRetry = Math.min(agentRetry * 2, 8000));
+        agentWs.onerror = () => { try { agentWs.close(); } catch (_) {} };
+      };
+      connectAgentVoice();
+    }
+
+    // Report the REAL speaking state (same scheme as /talk): heartbeat while
+    // anything is playing or queued, one false on the transition.
+    let reportedSpeaking = false;
+    setInterval(() => {
+      const speaking = _pendingSay > 0 || !!activeSource || performance.now() < speakingUntil;
+      if (!speaking && !reportedSpeaking) return;
+      reportedSpeaking = speaking;
+      fetch(`/avatar/speaking/${encodeURIComponent(conversationId)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ speaking }),
+      }).catch(() => {});
+    }, 700);
+  }
+</script>

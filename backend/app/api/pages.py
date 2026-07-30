@@ -70,6 +70,19 @@ def robot_page() -> FileResponse:
     )
 
 
+@router.get("/tile")
+def tile_page() -> FileResponse:
+    """Profile-picture face tier (owner ask 2026-07-30): the avatar's portrait
+    in a circle — the Google-Meet camera-off look — with a thin ring that
+    ripples with the voice while it speaks. Same wire contract as /talk and
+    /robot; opt an avatar in with `face: tile` in its avatar.yaml.
+
+    no-store for the same reason as /talk: the page's JS changes often."""
+    return FileResponse(
+        FRONTEND_DIR / "tile.html", headers={"Cache-Control": "no-store"}
+    )
+
+
 @router.get("/photoreal")
 def photoreal_page() -> FileResponse:
     """Photoreal avatar page (Stage 2): GPU-streamed MuseTalk face. Same speak

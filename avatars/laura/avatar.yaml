@@ -82,11 +82,13 @@ tasks: []
 # Knowledge lives in:  avatars/laura/knowledge/*.md
 # Drop more .md files there and re-run:  python backend/scripts/ingest.py
 
-# Volto in riunione: 3D gratuito (photoreal ACCANTONATO — owner 2026-07-22:
-# credito Runpod a $1.67 e pod fermo; il valore "photoreal" qui sotto
-# risveglierebbe il pod a ogni sessione di Laura. Per riattivare l'Ultra-HD:
-# ricarica Runpod e rimetti `face: photoreal`. Cache mtime: niente restart.)
-face: ""
+# Volto in riunione: TILE — la foto profilo in un cerchio (stile Google Meet
+# camera-off) con un anello che ondeggia con la voce (owner 2026-07-30, dev
+# env). Il ritratto è gpu/assets/portrait-laura.jpg via /laura-reference.jpg.
+# (photoreal ACCANTONATO — owner 2026-07-22: credito Runpod a $1.67 e pod
+# fermo; "photoreal" qui risveglierebbe il pod a ogni sessione. Il 3D di
+# prima: face: "". Cache mtime: niente restart.)
+face: tile
 
 # Identity-safe renderer assets. Missing files are reported as unavailable;
 # Laura may fall back only to Laura's own 3D model.

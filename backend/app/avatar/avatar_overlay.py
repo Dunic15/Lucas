@@ -40,7 +40,7 @@ _VOICE_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 _LOCALE = re.compile(r"^[A-Za-z]{2}(-[A-Za-z]{2})?$")
 _UUIDISH = re.compile(r"^[0-9a-fA-F-]{8,64}$")
 
-_FACES = ("", "talk", "photoreal", "avatar")
+_FACES = ("", "talk", "photoreal", "avatar", "robot", "tile")
 _BODIES = ("", "F", "M")
 
 
