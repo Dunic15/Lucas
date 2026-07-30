@@ -17,8 +17,11 @@ fail=0
 
 BODY='{"model":"openclaw","input":"smoke","max_output_tokens":1}'
 
-get_code() {  # url
-  curl -s -o /dev/null -w '%{http_code}' "$1"
+get_code() {  # url [token]
+  local url="$1" token="${2:-}"
+  local args=(-s -o /dev/null -w '%{http_code}')
+  [ -n "${token}" ] && args+=(-H "Authorization: Bearer ${token}")
+  curl "${args[@]}" "${url}"
 }
 post_code() {  # url [token]
   local url="$1" token="${2:-}"
@@ -42,12 +45,18 @@ echo "== /v1/responses auth is mandatory =="
 check "POST /v1/responses (no token)"  '^(401|403)$' "$(post_code "${BASE}/v1/responses")"
 
 if [ -n "${TOKEN}" ]; then
-  # A valid bearer must NOT be 401/403 (200, or a downstream 4xx/5xx, but authed).
+  # /v1/models proves gateway authentication without spending model tokens.
+  check "GET /v1/models (valid token)" '^200$' \
+    "$(get_code "${BASE}/v1/models" "${TOKEN}")"
+
+  # The live model call must complete too. A provider-auth error can also be
+  # HTTP 401, so accepting any non-401 status would misdiagnose a broken key as
+  # a healthy gateway.
   got="$(post_code "${BASE}/v1/responses" "${TOKEN}")"
-  if [[ "${got}" =~ ^(401|403)$ ]]; then
-    echo "FAIL  POST /v1/responses (valid token) -> ${got} (token rejected)"; fail=1
+  if [[ "${got}" =~ ^2[0-9][0-9]$ ]]; then
+    echo "PASS  POST /v1/responses (valid token + provider) -> ${got}"
   else
-    echo "PASS  POST /v1/responses (valid token) -> ${got} (authenticated)"
+    echo "FAIL  POST /v1/responses (valid token + provider) -> ${got}"; fail=1
   fi
 else
   echo "SKIP  valid-token check (OPENCLAW_GATEWAY_TOKEN not set)"

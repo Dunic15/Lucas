@@ -1,0 +1,68 @@
+{
+  "gateway": {
+    "mode": "local",
+    "bind": "lan",
+    "auth": {
+      "mode": "token",
+      "rateLimit": {
+        "maxAttempts": 10,
+        "windowMs": 60000,
+        "lockoutMs": 300000,
+        "exemptLoopback": false
+      }
+    },
+    "controlUi": {
+      "enabled": false
+    },
+    "terminal": {
+      "enabled": false
+    },
+    "http": {
+      "endpoints": {
+        "responses": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "anthropic/claude-opus-5"
+      }
+    }
+  },
+  "tools": {
+    "profile": "minimal",
+    "codeMode": {
+      "enabled": false
+    },
+    "elevated": {
+      "enabled": false
+    }
+  },
+  "browser": {
+    "enabled": false
+  },
+  "discovery": {
+    "mdns": {
+      "mode": "off"
+    }
+  },
+  "logging": {
+    "audit": {
+      "enabled": true,
+      "messages": "off"
+    }
+  },
+  "session": {
+    "maintenance": {
+      "mode": "enforce",
+      "pruneAfter": "7d",
+      "maxEntries": 1000,
+      "resetArchiveRetention": "1d",
+      "maxDiskBytes": "1gb",
+      "highWaterBytes": "750mb"
+    }
+  }
+}

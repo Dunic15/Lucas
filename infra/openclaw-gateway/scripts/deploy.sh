@@ -75,6 +75,7 @@ aws cloudformation deploy \
     SubnetId="${SubnetId}" \
     AvailabilityZone="${AvailabilityZone}" \
     InstanceType="${InstanceType:-t4g.small}" \
+    FrontDoorMode="${FrontDoorMode:-tunnel}" \
     OpenClawImage="${OpenClawImage}" \
     DataVolumeSizeGb="${DataVolumeSizeGb:-20}" \
     DataVolumeSnapshotId="${DataVolumeSnapshotId:-}" \
@@ -82,4 +83,4 @@ aws cloudformation deploy \
     SecretsPathPrefix="${SecretsPathPrefix:-/laura/dev/openclaw}" \
     AllowedHttpsCidr="${AllowedHttpsCidr:-127.0.0.1/32}"
 
-echo "Done. Next: point DNS at the Elastic IP (or start the tunnel), then run scripts/smoke.sh."
+echo "Done. Front door '${FrontDoorMode:-tunnel}' is selected; run scripts/smoke.sh after DNS/tunnel routing is ready."

@@ -34,12 +34,17 @@ OPENCLAW_IMAGE="$(imds meta-data/tags/instance/openclaw:image)"
 SECRETS_PREFIX="$(imds meta-data/tags/instance/openclaw:secrets-prefix)"
 LOG_GROUP="$(imds meta-data/tags/instance/openclaw:log-group)"
 DATA_DEVICE_HINT="$(imds meta-data/tags/instance/openclaw:data-device)"
-log "region=${AWS_DEFAULT_REGION} instance=${INSTANCE_ID} image=${OPENCLAW_IMAGE}"
+FRONT_DOOR_MODE="$(imds meta-data/tags/instance/openclaw:front-door)"
+log "region=${AWS_DEFAULT_REGION} instance=${INSTANCE_ID} image=${OPENCLAW_IMAGE} front-door=${FRONT_DOOR_MODE}"
 
 # Refuse to boot on an unpinned image — never :latest, never a bare tag.
 case "${OPENCLAW_IMAGE}" in
   *@sha256:*) : ;;
   *) log "FATAL: OPENCLAW_IMAGE is not pinned to an @sha256 digest"; exit 1 ;;
+esac
+case "${FRONT_DOOR_MODE}" in
+  tunnel|caddy) : ;;
+  *) log "FATAL: unsupported front door '${FRONT_DOOR_MODE}'"; exit 1 ;;
 esac
 
 # --- Packages ----------------------------------------------------------------
@@ -47,9 +52,9 @@ dnf -y update
 dnf -y install docker awscli amazon-cloudwatch-agent jq
 systemctl enable --now docker
 
-# Docker Compose v2 plugin, pinned + checksum-verified (update in the runbook).
-COMPOSE_VERSION="v2.29.7"
-COMPOSE_SHA256_ARM64="REPLACE_WITH_SHA256"  # fill from the runbook to enforce verification
+# Docker Compose plugin, pinned + checksum-verified against the official release.
+COMPOSE_VERSION="v5.1.4"
+COMPOSE_SHA256_ARM64="d4fb48b72857810314d3ee77123c89954101844efa4788031221f4c370495946"
 install_compose() {
   local dest="/usr/libexec/docker/cli-plugins/docker-compose"
   mkdir -p "$(dirname "${dest}")"
@@ -58,14 +63,8 @@ install_compose() {
   fi
   curl -fsSL -o "${dest}" \
     "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-aarch64"
-  # Verify only when a real digest has been filled in (placeholder is skipped
-  # with a loud warning so a fresh checkout still boots for a smoke test).
-  if [ "${COMPOSE_SHA256_ARM64}" != "REPLACE_WITH_SHA256" ] \
-     && echo "${COMPOSE_SHA256_ARM64}  ${dest}" | sha256sum -c - 2>/dev/null; then
-    log "docker compose checksum verified"
-  else
-    log "WARNING: docker compose checksum NOT verified — set COMPOSE_SHA256_ARM64"
-  fi
+  echo "${COMPOSE_SHA256_ARM64}  ${dest}" | sha256sum -c -
+  log "docker compose checksum verified"
   chmod 0755 "${dest}"
 }
 install_compose
@@ -91,27 +90,40 @@ find_data_device() {
 }
 DATA_MOUNT="/opt/openclaw/data"
 mkdir -p "${DATA_MOUNT}"
-DATA_DEV="$(find_data_device || true)"
-if [ -n "${DATA_DEV}" ]; then
-  if ! blkid "${DATA_DEV}" >/dev/null 2>&1; then
-    log "formatting fresh data volume ${DATA_DEV}"
-    mkfs.ext4 -L openclaw-data "${DATA_DEV}"
-  fi
-  grep -q "LABEL=openclaw-data" /etc/fstab || \
-    echo "LABEL=openclaw-data ${DATA_MOUNT} ext4 defaults,nofail 0 2" >> /etc/fstab
-  mount "${DATA_MOUNT}" || true
-else
-  log "WARNING: data volume not found — persistence is degraded"
+# CloudFormation creates VolumeAttachment after the instance exists, so user
+# data can start a few seconds before /dev/sdf appears. Wait with a hard bound;
+# never silently fall back to the ephemeral root disk.
+DATA_DEV=""
+for _attempt in $(seq 1 90); do
+  DATA_DEV="$(find_data_device || true)"
+  [ -n "${DATA_DEV}" ] && break
+  sleep 2
+done
+if [ -z "${DATA_DEV}" ]; then
+  log "FATAL: persistent data volume did not attach within 180 seconds"
+  exit 1
 fi
-mkdir -p "${DATA_MOUNT}/config" "${DATA_MOUNT}/auth"
+if ! blkid "${DATA_DEV}" >/dev/null 2>&1; then
+  log "formatting fresh data volume ${DATA_DEV}"
+  mkfs.ext4 -L openclaw-data "${DATA_DEV}"
+fi
+grep -q "LABEL=openclaw-data" /etc/fstab || \
+  echo "LABEL=openclaw-data ${DATA_MOUNT} ext4 defaults,nofail 0 2" >> /etc/fstab
+mount "${DATA_MOUNT}"
+mkdir -p "${DATA_MOUNT}/config" "${DATA_MOUNT}/auth" "${DATA_MOUNT}/caddy"
 # The auth-profile secret key store must not be world/group readable.
 chmod 0700 "${DATA_MOUNT}/auth" "${DATA_MOUNT}/config"
+# The official image runs as node (uid/gid 1000) and must be able to atomically
+# replace its config and persist state. Root-only host ownership would make the
+# gateway fail at startup.
+chown -R 1000:1000 "${DATA_MOUNT}/auth" "${DATA_MOUNT}/config"
 
 # --- Secrets: SSM SecureString -> root-only env file -------------------------
 APP_DIR="/opt/openclaw"
 mkdir -p "${APP_DIR}"
 ENV_FILE="${APP_DIR}/gateway.env"
 PROXY_ENV_FILE="${APP_DIR}/proxy.env"
+TUNNEL_ENV_FILE="${APP_DIR}/tunnel.env"
 get_secret() { aws ssm get-parameter --name "$1" --with-decryption \
   --query 'Parameter.Value' --output text 2>/dev/null || echo ""; }
 get_config() { aws ssm get-parameter --name "$1" \
@@ -122,23 +134,98 @@ LLM_API_KEY="$(get_secret "${SECRETS_PREFIX}/anthropic_api_key")"
 TUNNEL_TOKEN="$(get_secret "${SECRETS_PREFIX}/cloudflared_token")"
 PUBLIC_HOSTNAME="$(get_config "${SECRETS_PREFIX}/public_hostname")"
 
-# Gateway secrets go in a root-only 0600 file. The proxy/tunnel containers do
-# NOT receive the LLM key — only the gateway does (limit the blast radius).
+# Fail before writing files or starting containers when mandatory inputs are
+# absent or contain a newline that would corrupt Docker's env-file format.
+require_single_line() {
+  local name="$1" value="$2"
+  if [ -z "${value}" ] || [[ "${value}" == *$'\n'* ]] || [[ "${value}" == *$'\r'* ]]; then
+    log "FATAL: ${name} is missing or is not a single-line value"
+    exit 1
+  fi
+}
+require_single_line OPENCLAW_GATEWAY_TOKEN "${OPENCLAW_GATEWAY_TOKEN}"
+require_single_line ANTHROPIC_API_KEY "${LLM_API_KEY}"
+if [ "${FRONT_DOOR_MODE}" = "tunnel" ]; then
+  require_single_line CLOUDFLARED_TOKEN "${TUNNEL_TOKEN}"
+else
+  require_single_line OPENCLAW_PUBLIC_HOSTNAME "${PUBLIC_HOSTNAME}"
+fi
+
+# Each container receives only its own values. In particular cloudflared and
+# Caddy never receive the model-provider key or the gateway bearer token.
 umask 077
-cat > "${ENV_FILE}" <<ENVEOF
-OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
-ANTHROPIC_API_KEY=${LLM_API_KEY}
-OPENCLAW_GATEWAY_BIND=lan
-TUNNEL_TOKEN=${TUNNEL_TOKEN}
-ENVEOF
+printf 'OPENCLAW_GATEWAY_TOKEN=%s\nANTHROPIC_API_KEY=%s\n' \
+  "${OPENCLAW_GATEWAY_TOKEN}" "${LLM_API_KEY}" > "${ENV_FILE}"
 chmod 0600 "${ENV_FILE}"
 chown root:root "${ENV_FILE}"
 
-# Non-secret proxy config: just the hostname Caddy provisions a cert for.
-cat > "${PROXY_ENV_FILE}" <<PENVEOF
-OPENCLAW_PUBLIC_HOSTNAME=${PUBLIC_HOSTNAME}
-PENVEOF
+printf 'OPENCLAW_PUBLIC_HOSTNAME=%s\n' "${PUBLIC_HOSTNAME}" > "${PROXY_ENV_FILE}"
 chmod 0644 "${PROXY_ENV_FILE}"
+printf 'TUNNEL_TOKEN=%s\n' "${TUNNEL_TOKEN}" > "${TUNNEL_ENV_FILE}"
+chmod 0600 "${TUNNEL_ENV_FILE}"
+chown root:root "${TUNNEL_ENV_FILE}"
+
+# Managed, non-secret runtime config. OpenClaw refuses to start without
+# gateway.mode=local and disables /v1/responses by default, so both are explicit.
+# The gateway is deliberately a narrow client-tool orchestrator: no host shell,
+# filesystem, browser, or broad built-in tool profile. Laura supplies approved
+# connected-app tools per request.
+CONFIG_TMP="$(mktemp)"
+cat > "${CONFIG_TMP}" <<'JSONEOF'
+{
+  "gateway": {
+    "mode": "local",
+    "bind": "lan",
+    "auth": {
+      "mode": "token",
+      "rateLimit": {
+        "maxAttempts": 10,
+        "windowMs": 60000,
+        "lockoutMs": 300000,
+        "exemptLoopback": false
+      }
+    },
+    "controlUi": {"enabled": false},
+    "terminal": {"enabled": false},
+    "http": {
+      "endpoints": {
+        "responses": {"enabled": true}
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {"primary": "anthropic/claude-opus-5"}
+    }
+  },
+  "tools": {
+    "profile": "minimal",
+    "codeMode": {"enabled": false},
+    "elevated": {"enabled": false}
+  },
+  "browser": {"enabled": false},
+  "discovery": {"mdns": {"mode": "off"}},
+  "logging": {
+    "audit": {
+      "enabled": true,
+      "messages": "off"
+    }
+  },
+  "session": {
+    "maintenance": {
+      "mode": "enforce",
+      "pruneAfter": "7d",
+      "maxEntries": 1000,
+      "resetArchiveRetention": "1d",
+      "maxDiskBytes": "1gb",
+      "highWaterBytes": "750mb"
+    }
+  }
+}
+JSONEOF
+install -m 0600 -o 1000 -g 1000 "${CONFIG_TMP}" \
+  "${DATA_MOUNT}/config/openclaw.json"
+rm -f "${CONFIG_TMP}"
 unset OPENCLAW_GATEWAY_TOKEN LLM_API_KEY TUNNEL_TOKEN
 
 # --- Compose + Caddy definitions (mirror of infra/.../compose/*) -------------
@@ -169,7 +256,7 @@ services:
         awslogs-group: ${LOG_GROUP}
         awslogs-stream: gateway
   proxy:
-    image: caddy:2.8.4-alpine
+    image: caddy:2.8.4-alpine@sha256:af32e97399febea808609119bb21544d0265c58a02836576e32a2d082c262c17
     container_name: openclaw-caddy
     restart: unless-stopped
     depends_on: [gateway]
@@ -189,6 +276,27 @@ services:
         awslogs-group: ${LOG_GROUP}
         awslogs-stream: caddy
 COMPOSE_EOF
+
+cat > "${APP_DIR}/docker-compose.tunnel.yml" <<'TUNNEL_COMPOSE_EOF'
+services:
+  proxy:
+    profiles: ["disabled"]
+  tunnel:
+    image: cloudflare/cloudflared:2026.6.1@sha256:6d91c121b803126f7a5344005d17a9324788fc09d305b6e2560ec6040a7ae283
+    container_name: openclaw-cloudflared
+    restart: unless-stopped
+    depends_on: [gateway]
+    command: ["tunnel", "--no-autoupdate", "run"]
+    env_file: [/opt/openclaw/tunnel.env]
+    cap_drop: [NET_RAW, NET_ADMIN]
+    security_opt: ["no-new-privileges:true"]
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_DEFAULT_REGION}
+        awslogs-group: ${LOG_GROUP}
+        awslogs-stream: cloudflared
+TUNNEL_COMPOSE_EOF
 
 cat > "${APP_DIR}/Caddyfile" <<'CADDY_EOF'
 {
@@ -235,7 +343,12 @@ CWEOF
 # --- Launch -----------------------------------------------------------------
 export OPENCLAW_IMAGE LOG_GROUP AWS_DEFAULT_REGION
 cd "${APP_DIR}"
-docker compose pull
-docker compose up -d
+if [ "${FRONT_DOOR_MODE}" = "tunnel" ]; then
+  docker compose -f docker-compose.yml -f docker-compose.tunnel.yml pull
+  docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d
+else
+  docker compose pull
+  docker compose up -d
+fi
 log "openclaw gateway started"
 # >>> USER-DATA END

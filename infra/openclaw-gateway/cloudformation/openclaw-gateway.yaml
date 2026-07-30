@@ -32,8 +32,15 @@ Parameters:
   InstanceType:
     Type: String
     Default: t4g.small
-    AllowedValues: [t4g.small, t4g.medium, t3.small, t3.medium]
-    Description: ARM (t4g) is cheapest and matches ghcr arm64 images.
+    AllowedValues: [t4g.small, t4g.medium]
+    Description: ARM (t4g) is cheapest and matches the required arm64 AMI.
+  FrontDoorMode:
+    Type: String
+    Default: tunnel
+    AllowedValues: [tunnel, caddy]
+    Description: >-
+      Use a named Cloudflare tunnel by default (zero ingress), or Caddy with
+      explicitly configured HTTPS ingress and a development hostname.
   OpenClawImage:
     Type: String
     AllowedPattern: "^ghcr\\.io/openclaw/openclaw(:[A-Za-z0-9._-]+)?@sha256:[a-f0-9]{64}$"
@@ -89,7 +96,7 @@ Resources:
   SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: !Sub "${NamePrefix} — closed by default; egress 443/DNS only"
+      GroupDescription: !Sub "${NamePrefix} — closed by default; restricted egress"
       VpcId: !Ref VpcId
       # Explicit egress only (replaces the permissive default allow-all).
       SecurityGroupEgress:
@@ -108,6 +115,16 @@ Resources:
           ToPort: 53
           CidrIp: 0.0.0.0/0
           Description: DNS over TCP
+        - IpProtocol: tcp
+          FromPort: 7844
+          ToPort: 7844
+          CidrIp: 0.0.0.0/0
+          Description: Cloudflare Tunnel HTTP2 transport
+        - IpProtocol: udp
+          FromPort: 7844
+          ToPort: 7844
+          CidrIp: 0.0.0.0/0
+          Description: Cloudflare Tunnel QUIC transport
       Tags:
         - Key: Name
           Value: !Sub "${NamePrefix}-sg"
@@ -223,6 +240,8 @@ Resources:
           Value: !Ref LogGroup
         - Key: openclaw:data-device
           Value: /dev/sdf
+        - Key: openclaw:front-door
+          Value: !Ref FrontDoorMode
       # Injected by scripts/deploy.sh from scripts/user-data.sh (already base64).
       UserData: "@@USER_DATA_B64@@"
 

@@ -34,7 +34,7 @@ Facts pinned from the official OpenClaw docs (`docs.openclaw.ai`, `ghcr.io/openc
 | Property | Value |
 |---|---|
 | Official image | `ghcr.io/openclaw/openclaw` (GHCR) or `openclaw/openclaw` (Docker Hub mirror). **Avoid unofficial mirrors.** |
-| Version tags | date-based, e.g. `2026.2.26` (+ `-slim`, `-browser`). **Never `latest` / `main`.** |
+| Version tags | date-based releases and prereleases. Resolve a reviewed release to an immutable multi-arch digest; **never deploy `latest` / `main`.** |
 | Port | `18789` (gateway API + Control UI) |
 | Health | `/healthz` (liveness), `/readyz` (readiness) |
 | Auth | `OPENCLAW_GATEWAY_TOKEN` bearer token |
@@ -66,8 +66,23 @@ Laura backend (laura-backend-next, App Runner, eu-central-1)
         │  (TLS terminates here; bearer still enforced by OpenClaw)
         ▼  compose network; 18789 is expose-only (never host-published)
  openclaw-gateway :18789   ──►  /opt/openclaw/data (EBS gp3, encrypted)
-   ANTHROPIC_API_KEY, OPENCLAW_GATEWAY_TOKEN  (SSM SecureString → 0600 env)
+  ANTHROPIC_API_KEY, OPENCLAW_GATEWAY_TOKEN  (SSM SecureString → 0600 env)
 ```
+
+The bootstrap writes and validates a narrow OpenClaw runtime configuration:
+
+- `gateway.mode=local`, `gateway.bind=lan`, and token auth with failed-auth
+  rate limiting;
+- `gateway.http.endpoints.responses.enabled=true` (the endpoint is disabled by
+  OpenClaw by default);
+- primary model `anthropic/claude-opus-5`;
+- Control UI, host terminal, elevated tools, browser runtime, and mDNS
+  discovery disabled;
+- built-in tools restricted to the `minimal` profile. Laura supplies
+  organization-scoped connected-app function tools in each authenticated
+  request and still owns approval and execution;
+- metadata-only audit (`logging.audit.messages=off`) and enforced seven-day
+  session retention with bounded entry and disk limits.
 
 ### Why EC2 + Docker + EBS (and not the alternatives)
 
@@ -108,6 +123,7 @@ infra/openclaw-gateway/
 │   ├── docker-compose.tunnel.yml          # Cloudflare-tunnel overlay (no inbound port)
 │   └── Caddyfile                          # TLS + HSTS; reverse_proxy to gateway:18789
 ├── config/params.example.env              # NON-SECRET params (copy to params.env, gitignored)
+├── config/openclaw.json                   # managed narrow gateway config (Opus 5 + Responses API)
 ├── scripts/
 │   ├── user-data.sh                       # EC2 bootstrap (IMDSv2, SSM secrets → 0600 env, compose up)
 │   ├── deploy.sh                          # guard-first render+deploy of the stack
@@ -144,8 +160,8 @@ These cannot be invented and must be supplied by an operator with dev-account ac
 ### 0) Pin the image digest
 
 ```bash
-docker buildx imagetools inspect ghcr.io/openclaw/openclaw:2026.2.26   # → copy the digest
-# put ghcr.io/openclaw/openclaw:2026.2.26@sha256:<digest> into config/params.env
+docker buildx imagetools inspect ghcr.io/openclaw/openclaw:<reviewed-version>
+# put ghcr.io/openclaw/openclaw:<reviewed-version>@sha256:<digest> into config/params.env
 ```
 
 The template's `OpenClawImage` `AllowedPattern` and `deploy.sh` both **refuse**
@@ -173,7 +189,8 @@ and are stored encrypted. The instance role can read **only** `/laura/dev/opencl
 
 ```bash
 cp infra/openclaw-gateway/config/params.example.env infra/openclaw-gateway/config/params.env
-# fill VpcId, SubnetId, AvailabilityZone, OpenClawImage; leave AllowedHttpsCidr closed
+# fill VpcId, SubnetId, AvailabilityZone, OpenClawImage
+# FrontDoorMode=tunnel is the default; leave AllowedHttpsCidr closed
 ```
 
 ### 3) Deploy the stack
@@ -202,17 +219,20 @@ URL, and it sidesteps two real problems the direct-443 path has (below).
 1. Create a **named** tunnel on a **dev** Cloudflare zone the team controls and
    route a hostname (e.g. `openclaw-gw.<dev-zone>`) to `http://gateway:18789`.
 2. Store the tunnel token: `CLOUDFLARED_TOKEN=... put-secrets.sh`.
-3. Run the overlay on the box:
-   `docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d`.
+3. Set `FrontDoorMode=tunnel` in `config/params.env` (the default). Bootstrap
+   starts the overlay automatically and fails closed if its token is absent.
 4. Leave `AllowedHttpsCidr` at its closed `127.0.0.1/32` default — `cloudflared`
    makes only **outbound** connections, so the security group needs **no** inbound
-   rule at all. Cloudflare terminates TLS at its edge. Add a **Cloudflare Access**
+   rule at all. The stack permits only the required TCP/UDP `7844` tunnel
+   transport plus HTTPS and DNS egress. Cloudflare terminates TLS at its edge.
+   Add a **Cloudflare Access**
    service-token policy on the hostname for a second auth factor on top of the
    OpenClaw bearer token.
 
 **Alternative — Route53 custom domain + Caddy (a stable named service you own end-to-end).**
 
-1. In a Route53 hosted zone the team owns, create `openclaw-gw.dev.<zone>` → the
+1. Set `FrontDoorMode=caddy` in `config/params.env`. In a Route53 hosted zone
+   the team owns, create `openclaw-gw.dev.<zone>` → the
    stack's Elastic IP (`PublicIp` output). Do not invent DNS ownership; if the
    team has no spare zone, register a cheap dedicated **dev** domain
    (~$1–12/yr). **Never** reuse the customer domain.

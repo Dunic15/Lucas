@@ -15,19 +15,20 @@
 # Usage on the box (the runbook wires this into user-data as an alternative):
 #   docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d
 # The tunnel token is a SecureString at <SecretsPathPrefix>/cloudflared_token,
-# written into /opt/openclaw/gateway.env as TUNNEL_TOKEN — never committed.
+# written into the dedicated /opt/openclaw/tunnel.env — never committed. The
+# tunnel container never receives the Anthropic key or gateway bearer token.
 services:
   proxy:
     # Disable the Caddy front door; the tunnel replaces it.
     profiles: ["disabled"]
   tunnel:
-    image: cloudflare/cloudflared:2026.2.1
+    image: cloudflare/cloudflared:2026.6.1@sha256:6d91c121b803126f7a5344005d17a9324788fc09d305b6e2560ec6040a7ae283
     container_name: openclaw-cloudflared
     restart: unless-stopped
     depends_on: [gateway]
     command: ["tunnel", "--no-autoupdate", "run"]
-    # TUNNEL_TOKEN comes from the root-only gateway.env (SecureString-sourced).
-    env_file: [/opt/openclaw/gateway.env]
+    # TUNNEL_TOKEN comes from a root-only, tunnel-specific env file.
+    env_file: [/opt/openclaw/tunnel.env]
     cap_drop: [NET_RAW, NET_ADMIN]
     security_opt: ["no-new-privileges:true"]
     logging:
