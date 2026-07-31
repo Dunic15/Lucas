@@ -16,6 +16,7 @@ from .. import anam_client
 from .. import asana_client
 from .. import drive_client
 from .. import google_client
+from ..integrations import people_client
 from .. import gemini_ears
 from .. import avatars
 from .. import entitlements
@@ -110,6 +111,23 @@ def _avatar_asana_enabled(org_id: str, avatar_id: str) -> bool:
             return False
         declares = avatars.load(avatar_id).uses_native_tool("asana")
         return store.capability_enabled(avatar_id, "asana", connected=declares)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _avatar_contacts_enabled(org_id: str, avatar_id: str) -> bool:
+    """Whether this avatar may look up the org's Google Contacts: the org has
+    native Google connected AND this avatar is purpose-built for contacts
+    (declares it in avatar.yaml — Cedric the PA does) AND the avatar's
+    `google` capability toggle is not explicitly off (contacts rides the
+    google family — same gate the executor uses for calendar/email). Sync
+    (sqlite/yaml, both cached) — call via threadpool. Best-effort."""
+    try:
+        if not store.get_org_oauth(org_id, provider="google"):
+            return False
+        if not avatars.load(avatar_id).uses_native_tool("contacts"):
+            return False
+        return store.capability_enabled(avatar_id, "google", connected=True)
     except Exception:  # noqa: BLE001
         return False
 
@@ -593,7 +611,13 @@ async def refresh_session_brief(session, avatar, meeting_url: str, org_id: str) 
             org_id
         )
 
-    carryover, folder, asana_snapshot, reg, cal_brief, asana_live, week = await asyncio.gather(
+    def _contacts_live_sync() -> bool:
+        # Whether the LIVE contacts_lookup read tool is offered this session
+        # (tools.specs_for). Computed once here — specs_for runs on the live
+        # path and must never touch the DB. No network in this check.
+        return _avatar_contacts_enabled(org_id, avatar.id)
+
+    carryover, folder, asana_snapshot, reg, cal_brief, asana_live, contacts_live, week = await asyncio.gather(
         _quiet(run_in_threadpool(ledger.carryover_brief, meeting_url, org_id=org_id)),
         _quiet(
             run_in_threadpool(drive_client.folder_brief, avatar.drive_folder_id)
@@ -604,6 +628,7 @@ async def refresh_session_brief(session, avatar, meeting_url: str, org_id: str) 
         _quiet(run_in_threadpool(tool_registry.assemble, org_id, avatar)),
         _quiet(run_in_threadpool(google_client.calendar_brief, org_id)),
         _quiet(run_in_threadpool(_asana_live_sync)),
+        _quiet(run_in_threadpool(_contacts_live_sync)),
         # week — the accumulated past-7-days memory digest (Meeting Memory
         # Slice 1). Usually a single-row cache read; a regeneration is one
         # fast-model call bounded by the timeout so a slow model can never
@@ -616,6 +641,14 @@ async def refresh_session_brief(session, avatar, meeting_url: str, org_id: str) 
         ),
     )
     session.asana_live = bool(asana_live)
+    session.contacts_live = bool(contacts_live)
+    if contacts_live:
+        # Prime Google's contact-search indexes so the first mid-meeting
+        # lookup isn't served a stale empty set. Fire-and-forget: never
+        # delays the join, failures are swallowed inside the client.
+        asyncio.create_task(
+            _quiet(run_in_threadpool(people_client.warmup, org_id))
+        )
     session.memory_brief = carryover or ""
     if folder:
         session.memory_brief = (
@@ -652,7 +685,8 @@ async def refresh_session_brief(session, avatar, meeting_url: str, org_id: str) 
     if cal_brief:
         session.calendar_brief = cal_brief
         session.memory_brief = (
-            f"[Owner's calendar — upcoming meetings]\n{cal_brief}\n\n"
+            f"[Owner's calendar — recent past and upcoming, labeled]\n"
+            f"{cal_brief}\n\n"
             + (session.memory_brief or "")
         )
     if week:

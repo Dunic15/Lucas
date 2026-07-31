@@ -39,7 +39,8 @@ _BUILTINS = [
      "write": False, "approval": "auto"},
     {"name": "lookup_record", "does": "look up demo account records",
      "kind": "native", "write": False, "approval": "auto"},
-    {"name": "upcoming_meetings", "does": "the owner's upcoming calendar (read)",
+    {"name": "upcoming_meetings",
+     "does": "the owner's calendar — past 7 days + upcoming (read)",
      "kind": "native", "write": False, "approval": "auto"},
     {"name": "company_brain_search",
      "does": "search the org's indexed company knowledge (read-only, cited)",
@@ -74,6 +75,23 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
             "name": "gmail_send", "does": "send email as the owner",
             "kind": "native", "write": True, "approval": "approve", "connected": google_on,
         })
+
+        # Contacts lookup — avatar-gated read (the PA tier): offered only to
+        # avatars that declare the contacts native tool (Cedric). Read-only,
+        # instant, no action type in the executor.
+        try:
+            contacts_declares = bool(
+                getattr(avatar, "uses_native_tool", lambda _n: False)("contacts")
+            )
+        except Exception:  # noqa: BLE001
+            contacts_declares = False
+        if contacts_declares:
+            reg["native"].append({
+                "name": "contacts_lookup",
+                "does": "look up a person's email in the owner's Google Contacts",
+                "kind": "native", "write": False, "approval": "auto",
+                "connected": google_on,
+            })
 
         # Native Asana — Petra-only: the org is connected AND this avatar is
         # purpose-built for Asana (avatar.native_tools, e.g. Petra) AND the

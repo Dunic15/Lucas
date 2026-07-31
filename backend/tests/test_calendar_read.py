@@ -672,3 +672,43 @@ def test_windowed_read_allows_more_than_50_events(monkeypatch):
     seen.clear()
     google_client.list_calendar_events("org-o", max_results=150)
     assert seen.get("maxResults") == 50
+
+
+def test_brief_includes_labeled_past_section(monkeypatch):
+    """The brief carries a 'Past 7 days' section above 'Upcoming:' when the
+    windowed past read succeeds — that's what answers "what did I do
+    yesterday?" honestly."""
+    google_client._brief_cache.clear()
+
+    def _fake(org, max_results=8, time_min="", time_max=""):
+        if time_min:  # the bounded past window
+            return {"ok": True, "events": [{
+                "summary": "Yesterday Retro",
+                "start": {"dateTime": "2026-07-30T10:00:00+02:00"},
+                "end": {"dateTime": "2026-07-30T10:30:00+02:00"},
+            }]}
+        return {"ok": True, "events": _items()}
+
+    monkeypatch.setattr(google_client, "list_calendar_events", _fake)
+    brief = google_client.calendar_brief("org-past")
+    assert "Past 7 days (already happened):" in brief
+    assert "Yesterday Retro" in brief
+    assert "Upcoming:" in brief
+    # the past reads first, upcoming after
+    assert brief.index("Yesterday Retro") < brief.index("Weekly Planning")
+
+
+def test_brief_survives_failed_past_read(monkeypatch):
+    """A failed/absent past window never costs the upcoming section (and a
+    reader that doesn't understand the window kwargs degrades the same way)."""
+    google_client._brief_cache.clear()
+
+    def _fake(org, max_results=8, time_min="", time_max=""):
+        if time_min:
+            raise RuntimeError("past window unavailable")
+        return {"ok": True, "events": _items()}
+
+    monkeypatch.setattr(google_client, "list_calendar_events", _fake)
+    brief = google_client.calendar_brief("org-nofail")
+    assert "Weekly Planning" in brief
+    assert "Past 7 days" not in brief

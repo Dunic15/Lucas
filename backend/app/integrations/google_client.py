@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any
@@ -791,11 +791,17 @@ _BRIEF_MAX_EVENTS = 8
 # 1400 (was 900): guest lines now carry `Name <email>` so the avatar can
 # answer "what's X's email?" from context — the longer lines need headroom.
 _BRIEF_MAX_CHARS = 1400
+# The recent-past section ("what did I do yesterday?"): a bounded 7-day
+# lookback with its own smaller caps so the past can never crowd out the
+# upcoming section the schedule questions depend on.
+_BRIEF_PAST_DAYS = 7
+_BRIEF_PAST_MAX_EVENTS = 12
+_BRIEF_PAST_MAX_CHARS = 600
 _brief_cache: dict[str, tuple[float, str]] = {}
 
 
 def _event_line(item: dict) -> str:
-    """One compact line: '- Mon 21 Jul 14:00–14:30 — Weekly Planning (with A, B)'."""
+    """One compact line: '- Mon 21 Jul 2026 14:00–14:30 — Weekly Planning (with A, B)'."""
     start = item.get("start") or {}
     end = item.get("end") or {}
     title = str(item.get("summary") or "(no title)").strip()
@@ -804,7 +810,7 @@ def _event_line(item: dict) -> str:
     if raw_start:
         try:
             dt = datetime.fromisoformat(raw_start.replace("Z", "+00:00"))
-            when = dt.strftime("%a %d %b %H:%M")
+            when = dt.strftime("%a %d %b %Y %H:%M")
             raw_end = str(end.get("dateTime") or "")
             if raw_end:
                 try:
@@ -839,9 +845,24 @@ def _event_line(item: dict) -> str:
     return f"- {when} — {title}{extra}" if when or title else ""
 
 
+def _capped_lines(events: list, max_events: int, max_chars: int) -> str:
+    lines = [
+        line
+        for item in (events or [])[:max_events]
+        if isinstance(item, dict) and (line := _event_line(item))
+    ]
+    text = "\n".join(lines)
+    if len(text) > max_chars:
+        text = text[:max_chars].rsplit("\n", 1)[0]
+    return text
+
+
 def calendar_brief(org_id: str) -> str:
-    """Markdown brief of the org's upcoming primary calendar; "" when the org
-    has no Google connected or on any failure — the join proceeds without it."""
+    """Markdown brief of the org's primary calendar — the recent past (last
+    7 days, labeled) above the upcoming events; "" when the org has no Google
+    connected or on any failure — the join proceeds without it. The past
+    section is what lets the avatar answer "what did I do yesterday?" honestly
+    instead of claiming it can only see forward."""
     org = (org_id or "").strip()
     if not org:
         return ""
@@ -852,15 +873,35 @@ def calendar_brief(org_id: str) -> str:
     res = list_calendar_events(org, max_results=_BRIEF_MAX_EVENTS)
     brief = ""
     if res.get("ok"):
-        lines = [
-            line
-            for item in (res.get("events") or [])[:_BRIEF_MAX_EVENTS]
-            if isinstance(item, dict) and (line := _event_line(item))
-        ]
-        text = "\n".join(lines)
-        if len(text) > _BRIEF_MAX_CHARS:
-            text = text[:_BRIEF_MAX_CHARS].rsplit("\n", 1)[0]
-        brief = text
+        brief = _capped_lines(
+            res.get("events"), _BRIEF_MAX_EVENTS, _BRIEF_MAX_CHARS
+        )
+        # One extra bounded read for the recent past — same session-start
+        # path, still zero network in the meeting itself. Best-effort: a
+        # failed past read never costs the upcoming section.
+        past_txt = ""
+        try:
+            now_dt = datetime.now(tz=timezone.utc)
+            past = list_calendar_events(
+                org,
+                max_results=_BRIEF_PAST_MAX_EVENTS,
+                time_min=(now_dt - timedelta(days=_BRIEF_PAST_DAYS)).isoformat(),
+                time_max=now_dt.isoformat(),
+            )
+            if past.get("ok"):
+                past_txt = _capped_lines(
+                    past.get("events"), _BRIEF_PAST_MAX_EVENTS,
+                    _BRIEF_PAST_MAX_CHARS,
+                )
+        except Exception:  # noqa: BLE001 — the past section is optional
+            past_txt = ""
+        if past_txt and brief:
+            brief = (
+                f"Past 7 days (already happened):\n{past_txt}\n"
+                f"Upcoming:\n{brief}"
+            )
+        elif past_txt:
+            brief = f"Past 7 days (already happened):\n{past_txt}"
     _brief_cache[org] = (now, brief)
     return brief
 

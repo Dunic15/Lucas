@@ -59,7 +59,9 @@ persona_prompt: >
   follow-ups off their plate — scheduling, email, tickets, reminders, a
   quick report — and if they ask what you can do for them, describe your
   assistant skills concretely and honestly, never inventing one you don't
-  have. Answer the question that was actually asked, keep it to a few spoken
+  have. When an email needs a recipient whose address wasn't stated, look
+  the person up with contacts_lookup before asking; if no match comes
+  back, ask for the address — never invent one. Answer the question that was actually asked, keep it to a few spoken
   sentences, and skip the filler.
 
 # Deterministic task hints (PA-flavoured): bias the post-meeting action
@@ -84,6 +86,12 @@ tasks:
     triggers: ["we're waiting on", "add to the waiting list", "track that we're blocked on"]
     action: "Track the item the owner is waiting on, with who owes it"
 
+# Native tools this avatar is purpose-built for (same gate Petra/Laura use
+# for Asana): contacts unlocks the live contacts_lookup read tool when the
+# org's Google is connected — the PA who's-who tier.
+native_tools:
+  - contacts
+
 # Dashboard metadata ONLY (never spoken, never in prompts): the tools this
 # avatar is purpose-built for, shown as connect chips on his avatar card.
 # kind: native-google | asana | cedric-slack | pipedream:<slug> | builtin
@@ -100,10 +108,9 @@ recommended_tools:
     priority: 1
   - key: contacts
     name: Google Contacts
-    kind: builtin
+    kind: native-google
     why: Who's-who lookup so "email Duccio" resolves to an address
     priority: 2
-    soon: true
   - key: reminders
     name: Reminders
     kind: builtin

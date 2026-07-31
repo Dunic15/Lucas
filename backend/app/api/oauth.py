@@ -37,6 +37,15 @@ GOOGLE_CALENDAR_SCOPES = (
     # is what actually uses them, and it stays gated by the flag).
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/gmail.send",
+    # PA-tier scope bundle (added together so owners reconnect exactly ONCE):
+    # contacts power the who's-who lookup (people_client — "email Duccio"
+    # resolves to an address); gmail.compose powers draft-first email
+    # (email.draft creates a Gmail draft instead of sending — the external-
+    # recipient guardrail). Pre-bundle connections work unchanged; the new
+    # calls soft-fail with a "reconnect Google" message until reconnected.
+    "https://www.googleapis.com/auth/contacts.readonly",
+    "https://www.googleapis.com/auth/contacts.other.readonly",
+    "https://www.googleapis.com/auth/gmail.compose",
 )
 
 

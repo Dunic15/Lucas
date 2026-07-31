@@ -81,11 +81,17 @@ def test_summary_carries_cedric_tools_with_doors(client):
     cal = tools["google_calendar"]
     assert cal["connected"] is False
     assert cal["connect"] == {"type": "href", "url": "/oauth/google/connect"}
-    # builtin + soon → connected true, no door
+    # contacts became a real native-google tool in the PA buildout — it rides
+    # the same Google connection/door as the calendar
     contacts = tools["contacts"]
-    assert contacts["soon"] is True
-    assert contacts["connected"] is True
-    assert contacts["connect"] is None
+    assert contacts["soon"] is False
+    assert contacts["connected"] is False
+    assert contacts["connect"] == {"type": "href", "url": "/oauth/google/connect"}
+    # builtin + soon → connected true, no door
+    reminders = tools["reminders"]
+    assert reminders["soon"] is True
+    assert reminders["connected"] is True
+    assert reminders["connect"] is None
     # pipedream → connected unknown server-side (client overlays), slug door
     cly = tools["calendly"]
     assert cly["connected"] is None

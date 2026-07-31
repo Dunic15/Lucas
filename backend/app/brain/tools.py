@@ -395,10 +395,11 @@ TOOL_SPECS = [
         "function": {
             "name": "upcoming_meetings",
             "description": (
-                "The owner's upcoming Google Calendar meetings (read-only "
-                "snapshot taken at session start). Use for \"what's on my/our "
-                "calendar\", \"when is my next meeting\", or \"do I have a "
-                "meeting with X\"."
+                "The owner's Google Calendar (read-only snapshot taken at "
+                "session start): the last 7 days, labeled as already "
+                "happened, plus upcoming events. Use for \"what's on my/our "
+                "calendar\", \"when is my next meeting\", \"do I have a "
+                "meeting with X\", or \"what did I do yesterday\"."
             ),
             "parameters": {"type": "object", "properties": {}},
         },
@@ -449,9 +450,10 @@ def search_tools(query: str = "", session=None) -> str:
 
 
 def upcoming_meetings(session=None) -> str:
-    """The owner's upcoming-calendar snapshot for THIS session — assembled at
-    session start (google_client.calendar_brief), zero network on the live
-    path. "" from the assembler means no Google connected for the org."""
+    """The owner's calendar snapshot for THIS session — assembled at session
+    start (google_client.calendar_brief: a labeled past-7-days section plus
+    upcoming events), zero network on the live path. "" from the assembler
+    means no Google connected for the org."""
     brief = getattr(session, "calendar_brief", "") if session else ""
     return brief or (
         "no calendar is connected for this meeting's org — connect Google "
@@ -508,6 +510,61 @@ def asana_search(query: str = "", session=None) -> str:
     from .. import asana_client
 
     return _asana_result(asana_client.find_tasks(org, query.strip()))
+
+
+# ── Google Contacts lookup (read-only, PA tier) ──
+# Same structural contract as company_brain_search: read-only, no action type
+# in the executor, results are data. Offered only when session start
+# established that this org has Google connected AND the avatar declares the
+# contacts native tool (session.contacts_live) — see meeting/lifecycle.
+def contacts_lookup(name: str = "", session=None) -> str:
+    """Resolve a person's email address from the owner's Google Contacts.
+    LIVE read (bounded timeout); spoken addresses in the query are normalized
+    first so "duccio at sff studio dot com" resolves too."""
+    org = _session_org(session)
+    if not org:
+        return "error: no org is attached to this session"
+    q = (name or "").strip()
+    if not q:
+        return "error: 'name' is required (the person to look up)"
+    from ..integrations import people_client
+    from .asr_normalize import normalize_spoken_email
+
+    res = people_client.search_contacts(org, normalize_spoken_email(q))
+    if not isinstance(res, dict) or not res.get("ok"):
+        err = (res or {}).get("error") if isinstance(res, dict) else ""
+        return f"error: {err or 'contacts are unavailable right now'}"
+    rows = res.get("results") or []
+    if not rows:
+        return (
+            f"no contact matched '{q}' — ask for the address rather than "
+            "guessing one"
+        )
+    return json.dumps({"results": rows})
+
+
+CONTACTS_TOOL_SPEC = {
+    "type": "function",
+    "function": {
+        "name": "contacts_lookup",
+        "description": (
+            "Look up a person's email address in the owner's Google "
+            "Contacts. READ-ONLY. Use BEFORE queueing an email when the "
+            "recipient's address wasn't stated in the meeting; if no match "
+            "comes back, ask for the address — never invent one."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "The person's name (or partial address).",
+                }
+            },
+            "required": ["name"],
+        },
+    },
+}
 
 
 # ── Company Brain search (DATA PLANE, read-only) ──
@@ -619,6 +676,7 @@ _DISPATCH = {
     "search_tools": search_tools,
     "upcoming_meetings": upcoming_meetings,
     "company_brain_search": company_brain_search,
+    "contacts_lookup": contacts_lookup,
     "asana_projects": asana_projects,
     "asana_tasks": asana_tasks,
     "asana_search": asana_search,
@@ -628,7 +686,8 @@ _DISPATCH = {
 # keeps its plain signature — the session seam is strictly additive.
 _SESSION_TOOLS = {
     "queue_action", "list_capabilities", "search_tools", "upcoming_meetings",
-    "company_brain_search", "asana_projects", "asana_tasks", "asana_search",
+    "company_brain_search", "contacts_lookup",
+    "asana_projects", "asana_tasks", "asana_search",
 }
 
 
@@ -653,6 +712,11 @@ def specs_for(session, *, live: bool = True) -> list[dict]:
     # org has Asana connected and the avatar may use it (session.asana_live).
     if session is not None and getattr(session, "asana_live", False):
         specs += ASANA_TOOL_SPECS
+    # Contacts lookup: offered only when session start established that this
+    # org has Google connected and the avatar declares the contacts native
+    # tool (session.contacts_live) — the PA tier (Cedric).
+    if session is not None and getattr(session, "contacts_live", False):
+        specs.append(CONTACTS_TOOL_SPEC)
     reg = getattr(session, "tool_registry", None) if session else None
     mcp_tools = reg.get("cedric_mcp") if isinstance(reg, dict) else None
     if mcp_tools:

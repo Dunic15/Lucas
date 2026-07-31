@@ -1691,14 +1691,19 @@ def _is_isoish(value: object) -> bool:
 
 def _action_source(action: dict, brief: str = "") -> str:
     """The distilled text a typed spec's args may draw from — never the raw
-    transcript, only fields already extracted into the artifact."""
+    transcript, only fields already extracted into the artifact. Spoken
+    addresses are normalized ("duccio at sff studio dot com" -> real form) so
+    a dictated recipient is groundable WITHOUT loosening the guard itself —
+    the address must still literally appear in this normalized source."""
+    from .asr_normalize import normalize_spoken_email
+
     parts = [
         str(action.get("item") or ""),
         str(action.get("owner") or ""),
         str(action.get("deadline") or ""),
         brief or "",
     ]
-    return "\n".join(p for p in parts if p)
+    return normalize_spoken_email("\n".join(p for p in parts if p))
 
 
 def _sanitize_typed(typed: object, action: dict, brief: str = "") -> dict | None:
