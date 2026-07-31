@@ -107,9 +107,24 @@ def test_laura_hidden_but_config_parses(client):
 
 
 def test_summary_avatar_without_recommended_tools_ships_empty_list(client):
+    """A yaml without the field parses to [] (loader-level — petra is parked
+    off the dashboard, so the property is asserted on her config directly),
+    and every visible card carries the key."""
+    from app import avatars as avatars_mod
+
+    assert avatars_mod.load("petra").recommended_tools == []
     body = client.get("/dashboard/summary").json()
-    petra = next(a for a in body["avatars"] if a["id"] == "petra")
-    assert petra["recommended_tools"] == []
+    assert all("recommended_tools" in a for a in body["avatars"])
+
+
+def test_dashboard_roster_is_cedric_only(client):
+    """Owner decision 2026-07-31: Cedric-only focus — laura AND petra (whose
+    display name is 'Laura') are parked, so no 'Laura' card can appear."""
+    body = client.get("/dashboard/summary").json()
+    ids = {a["id"] for a in body["avatars"]}
+    assert "cedric" in ids
+    assert "laura" not in ids and "petra" not in ids
+    assert all(a["name"].lower() != "laura" for a in body["avatars"])
 
 
 def test_summary_connected_google_flips_chip(client, monkeypatch):

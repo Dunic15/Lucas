@@ -17,6 +17,13 @@ id: petra
 name: Laura
 role: AI Project Manager
 
+# Owner decision 2026-07-31: the product focuses on CEDRIC only for now.
+# Petra displays as "Laura" (name above), so her card was the second "Laura"
+# on the Avatars tab — she goes off the dashboard roster entirely. Config,
+# knowledge and Asana wiring stay dormant for when she returns; she still
+# loads for email-alias routing and past-meeting attribution.
+hidden: true
+
 # Avatar-specific native tools: this is the PM avatar, so SHE owns Asana —
 # it defaults ON only for her (every other avatar defaults Asana OFF even when
 # the org has connected it). Google Calendar + Gmail are baseline for all
