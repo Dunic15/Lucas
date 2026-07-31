@@ -301,6 +301,27 @@ def test_product_avatar_personas_are_honest_about_context():
         assert "search the team's meeting memory" not in p, avatar_id
 
 
+# ── knowledge docs describe contents, not our sync mechanism ──
+
+def test_drive_knowledge_doc_has_no_mechanism_meta():
+    """The 0728 transcript: asked what's in the Drive folder, Cedric read the
+    knowledge file's PREAMBLE aloud — "synthetic test data… refreshed
+    manually; a live Drive connector is the planned follow-up" — internal
+    mechanism notes (by then false: the connector is wired via
+    drive_folder_id), not folder contents. Knowledge docs are spoken material:
+    they must describe what the docs SAY, never how we sync them, and never
+    contain a raw Drive URL the avatar could read out."""
+    text = (avatars.load("cedric").knowledge_dir / "drive_cedric_test.md").read_text()
+    for banned in (
+        "refreshed manually",
+        "planned follow-up",
+        "Synthetic test data",
+        "synthetic test data",
+        "drive.google.com",
+    ):
+        assert banned not in text, banned
+
+
 # ── ASR keyterms ──
 
 def test_keyterms_from_name_and_setting(monkeypatch):
@@ -311,3 +332,78 @@ def test_keyterms_from_name_and_setting(monkeypatch):
 
     monkeypatch.setattr(settings, "asr_keyterms", "")
     assert recall_client._keyterms("Laura") == ["Laura"]
+
+
+# ── date anchor + honest framing (the "upcoming Monday described as past" bug) ──
+
+def test_today_line_is_a_dated_anchor():
+    """The 0728 transcript: with no date anchor and yearless brief lines, the
+    model described the UPCOMING Monday client meeting as if it had already
+    happened. The live system prompt now ends with an ISO 'Today is …' line."""
+    import re as _re
+
+    from app.brain import engine
+
+    line = engine._today_line()
+    assert _re.search(r"Today is \d{4}-\d{2}-\d{2} \((Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day\)", line)
+    # And the prompt actually tells the model what to do with it.
+    assert "UPCOMING" in engine.ANSWER_STREAM_SYSTEM
+    assert "PAST" in engine.ANSWER_STREAM_SYSTEM
+
+
+def test_brief_header_is_not_all_past_tense():
+    """The whole memory_brief (upcoming calendar included) used to be framed as
+    'What Laura remembers from previous meetings' — the source of the
+    future-described-as-past confusion. The framing must label sections
+    honestly, not blanket-label everything as memory."""
+    import inspect
+
+    from app.brain import engine
+
+    src = inspect.getsource(engine.answer_question_stream)
+    assert "What Laura remembers from previous meetings" not in src
+    assert "UPCOMING (future)" in src
+
+
+def test_no_promised_check_without_a_lookup():
+    """'Let me check if there's more information available' ×3 with no lookup
+    ever run. The prompt must forbid promising checks it can't perform."""
+    from app.brain import engine
+
+    assert 'Never promise to "check"' in engine.ANSWER_STREAM_SYSTEM
+
+
+# ── capability docs: no absolute cross-meeting claims ──
+
+def test_capability_docs_claim_no_universal_memory():
+    """about/knowledge packs claimed Drive access unconditionally and memory
+    'across *every* meeting I've sat in' — real backing is same-link carryover
+    plus a flag-gated week digest. Spoken self-descriptions must match."""
+    cedric = avatars.load("cedric")
+    docs = [
+        cedric.about_dir / "cedric_capabilities.md",
+        cedric.knowledge_dir / "cedric_meeting_playbook.md",
+        cedric.knowledge_dir / "cedric_personal_assistant.md",
+    ]
+    for doc in docs:
+        text = doc.read_text()
+        assert "every meeting I've sat in" not in text, doc.name
+        assert "every meeting he's sat in" not in text, doc.name
+
+
+# ── RAG never indexes HTML comments (authoring/provenance notes) ──
+
+def test_rag_chunks_never_contain_html_comments(tmp_path):
+    from app.brain import rag
+
+    doc = tmp_path / "doc.md"
+    doc.write_text(
+        "# Title\n\n<!-- internal provenance: synced by hand, do not speak -->\n"
+        "Real content the avatar may quote.\n\n## Section\n\nMore content.\n"
+    )
+    chunks = rag._collect_chunks([doc])
+    assert chunks, "expected at least one chunk"
+    for c in chunks:
+        assert "provenance" not in c.text
+        assert "<!--" not in c.text
+    assert any("Real content" in c.text for c in chunks)

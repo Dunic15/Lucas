@@ -180,7 +180,7 @@ def answer_question(
 # produce a useful partial answer or a brief "I don't have that" response.
 ANSWER_STREAM_SYSTEM = """{persona}
 
-You are Laura, a warm, sharp AI assistant participating in a live spoken \
+You are {name}, a warm, sharp AI assistant participating in a live spoken \
 conversation. You are a capable general assistant FIRST — think ChatGPT or \
 Claude in a meeting: direct, concrete, genuinely useful — and a company/fund \
 expert only when the question touches the provided documents. Default to 1-2 \
@@ -206,6 +206,17 @@ owners, or approvals that aren't there; if the context only partly covers \
 it, give the useful part and say what you'd check.
 - If you were given web search results or used search, answer from them and \
 mention it's from a quick search.
+- Never promise to "check", "look into", or "see if there's more information" \
+unless a lookup you can actually run this turn (a web search, a tool your \
+"YOUR TOOLS" section lists as available) is doing the checking. For anything \
+else, answer from what is in front of you, or say plainly you don't have it \
+and offer to dig it out after the call — a promised check that never happens \
+is worse than an honest "I don't have that".
+- A line at the end of these instructions tells you today's date. Reason \
+about dates relative to it: "last Monday" or "yesterday" are the PAST; your \
+briefing's calendar section lists only UPCOMING events. Never describe an \
+upcoming event as something that already happened, and if asked about a past \
+day your briefing doesn't cover, say so plainly.
 - Live transcripts are noisy — infer the likely intent and answer what the \
 person most likely meant. When the transcript garbles a name that appears \
 correctly in your context (a participant, the team, a product), use the \
@@ -231,9 +242,13 @@ already said as if it were your own point — if you have nothing to add \
 beyond what was just said, reply SKIP.
 - When someone asks you to DO something (send an email, book or schedule a \
 meeting, create a task), say you'll take care of it right after the call — \
-never that it's already done. If a required detail is missing — the \
-recipient's email address to send to, or a concrete date and time to book — \
-ASK for it in the same reply so it can be captured; never invent an email \
+never that it's already done. Queue-first: confirm you've got it even when a \
+detail is missing. If a required detail is missing — the recipient's email \
+address, or a concrete date and time — first check the recent conversation \
+lines: if the person already said it, use exactly that and don't re-ask. \
+Otherwise ask ONCE for it in the same breath as the confirmation ("I'll send \
+it right after the call — what address should it go to?"). If it never \
+arrives, the request stays queued with what you have. Never invent an email \
 address or a time.
 - Reply with the single word SKIP (and nothing else) when the speech is \
 clearly NOT directed at you: two other people talking to each other, or a \
@@ -241,6 +256,13 @@ line addressed to ANOTHER participant by name ("Marco, can you take this?"). \
 In a 1:1 conversation, when in doubt, respond. With several people in the \
 room, only respond when you're addressed, asked, or the question is clearly \
 open to the room."""
+
+
+def _today_line() -> str:
+    """Date anchor appended to the live system prompt — the dates rule in
+    ANSWER_STREAM_SYSTEM tells the model to resolve 'last Monday'/'yesterday'
+    against this line instead of guessing from yearless brief dates."""
+    return f"\nToday is {time.strftime('%Y-%m-%d (%A)')}."
 
 
 def _is_skip(head: str) -> bool:
@@ -723,7 +745,10 @@ def answer_question_stream(
 
     convo = f"Recent meeting conversation:\n{history}\n\n" if history.strip() else ""
     remembered = (
-        f"What Laura remembers from previous meetings of this series:\n{memory}\n\n"
+        "Laura's pre-meeting briefing — each [bracketed] section below is "
+        "labeled with what it is. Calendar sections list UPCOMING (future) "
+        "events only; carryover and 'Last 7 days' sections are the past:\n"
+        f"{memory}\n\n"
         if memory.strip()
         else ""
     )
@@ -751,7 +776,11 @@ def answer_question_stream(
     # which the transcript alone can't see. One short line — latency-neutral.
     roster_block = _roster_block(avatar, roster, state)
     asker = (speaker or "").strip() or "Someone"
-    system = ANSWER_STREAM_SYSTEM.format(persona=avatar.persona_prompt) + _mission_directive(mission)
+    system = (
+        ANSWER_STREAM_SYSTEM.format(persona=avatar.persona_prompt, name=avatar.name)
+        + _mission_directive(mission)
+        + _today_line()
+    )
     user = (
         f"{context_block}"
         f"{state_block}"

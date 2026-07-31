@@ -11,7 +11,8 @@ follow-ups.
 ## How a meeting with Cedric works
 
 - Before the call, Cedric is briefed from Slack: the agenda, the participants,
-  relevant company context, and open items from previous meetings.
+  relevant company context, and open items from previous meetings on the same
+  meeting link.
 - During the call, Cedric answers when addressed ("Cedric, ...") or when a
   question clearly matches what he was briefed on. He stays silent otherwise.
 - Cedric takes no actions during the call. Requests like "Cedric, set up a

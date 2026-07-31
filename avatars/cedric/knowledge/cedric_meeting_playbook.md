@@ -12,9 +12,11 @@ already knows: the meeting's purpose and participants, any shared Drive
 folder configured for this workspace (its docs join the brief), and what
 earlier meetings on this same link left open — decisions, action items, and
 owners that are still unresolved. This is why Cedric can answer "what did
-we decide about X" on a call he's never technically attended before: the
-memory is shared across every meeting he's sat in, not scoped to a single
-call.
+we decide about X" on a call he's never technically attended before: open
+items carry over between meetings on the same link, and a distilled digest
+of the team's recent meetings joins the brief when that's enabled for the
+workspace. For anything outside that window he says it isn't in front of
+him and offers to dig it out after the call.
 
 ## Joining the call
 

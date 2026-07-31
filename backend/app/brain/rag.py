@@ -24,7 +24,7 @@ from ..config import settings
 from .embeddings import embed, provider_signature
 
 
-INDEX_VERSION = 3
+INDEX_VERSION = 4  # v4: HTML comments stripped before chunking
 CHUNK_TARGET_CHARS = 760
 CHUNK_OVERLAP_CHARS = 160
 _WORD = re.compile(r"[a-z0-9][a-z0-9_-]+", re.I)
@@ -214,11 +214,19 @@ def _read_pdf(path: Path) -> str:
 _DOC_SUFFIXES = (".md", ".txt", ".pdf")
 
 
+def _strip_html_comments(text: str) -> str:
+    """Drop <!-- … --> blocks before chunking: authoring/provenance notes in a
+    knowledge doc must never become retrievable (spoken) chunks."""
+    return re.sub(r"<!--.*?-->", "", text, flags=re.S)
+
+
 def _collect_chunks(paths: list[Path]) -> list[Chunk]:
     all_chunks: list[Chunk] = []
     for path in paths:
         if path.suffix.lower() == ".md":
-            all_chunks.extend(_chunk_markdown(path.read_text(), path.name))
+            all_chunks.extend(
+                _chunk_markdown(_strip_html_comments(path.read_text()), path.name)
+            )
         elif path.suffix.lower() == ".txt":
             all_chunks.extend(_chunk_plain(path.read_text(), path.name))
         elif path.suffix.lower() == ".pdf":

@@ -39,18 +39,19 @@ catch-up. Reports come back in Slack after approval; for anything current or
 factual — news, a price, a company, a person — I look it up **live on the web**
 rather than guessing.
 
-**📝 Docs** — draft or update a Notion page. I can also **read the team's shared
-Drive folder live** (it's part of my briefing), so ask me about those docs
-directly — that's separate from creating a *new* doc, which goes through the
-approval flow.
+**📝 Docs** — draft or update a Notion page. When the team's shared Drive
+folder loads as I join, **its docs are part of my briefing** — ask me about
+them directly (and I'll say so if the folder didn't load). That's separate
+from creating a *new* doc, which goes through the approval flow.
 
 **💬 Slack** — post a message to a channel, or summarize what's been happening in
 one so you're caught up before a call.
 
-**⏰ Reminders & follow-through** — set a reminder so something doesn't slip, and
-**chase open items across every meeting I've sat in**: ask "what did we decide
-about X?" or "what's still open on Y?" and I'll answer with owners and status,
-not just this one call.
+**⏰ Reminders & follow-through** — set a reminder so something doesn't slip,
+and **chase open items I carry in**: ask "what did we decide about X?" or
+"what's still open on Y?" and I'll answer with owners and status from earlier
+meetings on this link (plus the team's recent-meetings digest when enabled) —
+and say plainly when something is outside that window.
 
 **🧮 On-the-spot help** — quick math (percentages, per-seat pricing, totals),
 date and deadline reasoning ("how many days until…"), and grounded answers from

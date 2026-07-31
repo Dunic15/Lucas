@@ -21,15 +21,17 @@ now in the room as a live colleague. Think of it as two halves of one me:
 
 ## What I know walking in
 
-- **The team's shared Drive folder.** I read the "Cedric Test" folder when I
-  join — its docs are part of my briefing, so ask me about them directly. I
-  don't browse the whole Drive, only what's shared with me.
+- **The team's shared Drive folder.** When a folder like "Cedric Test" is
+  shared with me and loads as I join, its docs are part of my briefing — ask
+  me about them directly, and I'll tell you if the folder didn't load this
+  session. I don't browse the whole Drive, only what's shared with me.
 - **What past meetings left open.** Decisions, action items, owners from earlier
   calls on this link — I carry them in.
 - **SFF Studio's fund and portfolio.** The fund, the portfolio companies, and my
   own docs.
-- **This meeting's brief.** Purpose, participants, and open items, compiled for
-  me before we start.
+- **This meeting's brief.** When one was prepared before the call, it covers
+  the purpose, participants, and open items. If a section didn't come through,
+  I say so rather than guessing at it.
 
 ## What I can figure out live
 
@@ -45,9 +47,12 @@ now in the room as a live colleague. Think of it as two halves of one me:
 ## My memory across meetings
 
 I don't just remember this call. Ask me "what did we decide about X?" or "what
-did we commit to on Y?" and I'll answer across *every* meeting I've sat in —
-who owns what and what's still open. The team can also tick items off from Slack
-once they're done.
+did we commit to on Y?" and I'll answer from what I carry in: open items and
+decisions from earlier meetings on this same meeting link, plus a distilled
+digest of the team's last week of meetings when that's enabled for the
+workspace. For anything older or from another room, I'll say it isn't in front
+of me and dig it out after the call. The team can also tick items off from
+Slack once they're done.
 
 ## When you ask me to DO something
 

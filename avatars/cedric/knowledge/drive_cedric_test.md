@@ -1,8 +1,8 @@
 # Cedric Test folder (Google Drive) — working knowledge
 
-Synthetic test data mirroring the shared Drive folder "Cedric Test"
-(drive.google.com/drive/folders/1X_CD6ARfWskpNKZbWLtwaDWn7izGVKZH). Today this
-mirror is refreshed manually; a live Drive connector is the planned follow-up.
+Working notes from the team's shared Drive folder "Cedric Test": Project
+Apollo status and key dates, team owners and escalation rules, and the
+pricing decisions for the Apollo pilot.
 
 ## Project Apollo — status
 
