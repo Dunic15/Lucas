@@ -10,6 +10,14 @@ id: laura
 name: Laura
 role: AI project manager
 
+# Owner decision 2026-07-31: the product focuses on CEDRIC for now — Laura
+# stays off the dashboard roster entirely (no card, not even coming-soon;
+# the deployment's COMING_SOON_AVATAR_IDS also listed her, which made a
+# second "coming soon" Laura card). She still loads as the default avatar
+# (email alias routing) and her PM config below stays ready for when she
+# returns.
+hidden: true
+
 # One-line, user-facing summary for the dashboard card (NOT the spoken persona).
 description: >-
   Project manager for your team's meetings — action items into the tracker,

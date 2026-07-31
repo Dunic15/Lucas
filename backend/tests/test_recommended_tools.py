@@ -93,16 +93,17 @@ def test_summary_carries_cedric_tools_with_doors(client):
     }
 
 
-def test_summary_laura_visible_with_asana_door(client):
+def test_laura_hidden_but_config_parses(client):
+    """Laura is parked (hidden: true — Cedric-only focus) so she ships no
+    card, but her PM config stays valid for when she returns: the yaml's
+    recommended_tools parse and she declares asana."""
+    from app import avatars as avatars_mod
+
     body = client.get("/dashboard/summary").json()
-    ids = [a["id"] for a in body["avatars"]]
-    assert "laura" in ids  # no longer hidden
-    laura = next(a for a in body["avatars"] if a["id"] == "laura")
-    assert laura["role"] == "AI project manager"
-    tools = _tools(body, "laura")
-    asana = tools["asana"]
-    assert asana["connected"] is False
-    assert asana["connect"] == {"type": "view", "view": "connections"}
+    assert "laura" not in [a["id"] for a in body["avatars"]]
+    laura = avatars_mod.load("laura")
+    assert laura.uses_native_tool("asana")
+    assert any(t["kind"] == "asana" for t in laura.recommended_tools)
 
 
 def test_summary_avatar_without_recommended_tools_ships_empty_list(client):
