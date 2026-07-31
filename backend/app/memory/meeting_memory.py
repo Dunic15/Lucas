@@ -64,6 +64,13 @@ def _norm_dn(name: str) -> str:
     return re.sub(r"\s+", " ", (name or "").strip().casefold())
 
 
+def _norm_project(name: str) -> str:
+    """Project dedupe key (spec §6): casefold, punctuation → space (so
+    'Atlas-Migration' == 'Atlas Migration'), collapse whitespace — EXACT-
+    normalized match only ever creates/merges nodes."""
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", (name or "").casefold())).strip()
+
+
 def _clip(value: Any, limit: int = _FIELD_CHARS) -> str:
     return str(value or "").strip()[:limit]
 
@@ -279,7 +286,10 @@ def deposit(session: Any, artifact: dict) -> bool:
                         "spoke": bool(att["spoke"]),
                     },
                 )
-            _write_graph(conn, org_id, meeting_id, bot_id, row, person_ids)
+            _write_graph(
+                conn, org_id, meeting_id, bot_id, row, person_ids,
+                records=artifact.get("decision_records"),
+            )
             _replace_chunks(conn, org_id, meeting_id, chunks)
         return True
     except Exception:
@@ -453,11 +463,18 @@ def _edge(conn, org_id, src_id, rel, dst_id, meeting_id, confidence=1.0):
     )
 
 
-def _write_graph(conn, org_id, meeting_id, bot_id, row, person_ids) -> None:
+def _write_graph(
+    conn, org_id, meeting_id, bot_id, row, person_ids, records=None
+) -> None:
     """Entities + edges from STRUCTURED artifact data only (spec §8.4):
     meeting node keyed bot_id; decision nodes keyed sha1(ledger._norm(text));
     action nodes keyed action_id; owner edges only when the owner string
-    normalizes to a person already in the room — no fuzzy identity."""
+    normalizes to a person already in the room — no fuzzy identity.
+    ``records`` are the summarizer's decision_records: their
+    ``related_project`` mints project nodes (exact-normalized key) with
+    meeting-about-project and decision-about-project edges, and a
+    ``decision_maker`` who matches someone in the room gets a
+    person-decided-decision edge."""
     # Re-deposit replaces this meeting's edges wholesale (like chunks) so an
     # edited artifact can't leave orphaned decision/action edges behind.
     conn.execute(
@@ -497,6 +514,32 @@ def _write_graph(conn, org_id, meeting_id, bot_id, row, person_ids) -> None:
         owner_key = _norm_dn(str(action.get("owner") or ""))
         if owner_key and owner_key in person_ids:
             _edge(conn, org_id, person_ids[owner_key], "owns", ent, meeting_id)
+    for rec in records or []:
+        if not isinstance(rec, dict):
+            continue
+        dec_text = _clip(rec.get("decision"))
+        dec_ent = None
+        if dec_text:
+            dec_key = hashlib.sha1(ledger._norm(dec_text).encode()).hexdigest()
+            dec_ent = _upsert_entity(
+                conn, org_id, "decision", dec_key, display=dec_text[:200]
+            )
+            # A decision that only appears in decision_records still hangs off
+            # this meeting (idempotent when the decisions[] loop made it).
+            _edge(conn, org_id, meeting_ent, "decided", dec_ent, meeting_id)
+        proj_raw = _clip(rec.get("related_project"), 120)
+        proj_key = _norm_project(proj_raw)
+        if proj_key:
+            proj_ent = _upsert_entity(
+                conn, org_id, "project", proj_key, display=proj_raw
+            )
+            _edge(conn, org_id, meeting_ent, "about", proj_ent, meeting_id)
+            if dec_ent:
+                _edge(conn, org_id, dec_ent, "about", proj_ent, meeting_id)
+        maker_key = _norm_dn(str(rec.get("decision_maker") or ""))
+        if dec_ent and maker_key and maker_key in person_ids:
+            _edge(conn, org_id, person_ids[maker_key], "decided", dec_ent,
+                  meeting_id)
 
 
 def _build_chunks(row: dict) -> list[dict[str, str]]:
@@ -1398,13 +1441,14 @@ def lookup_person(query: str, session: Any) -> str:
             if extra and not cur["extra"]:
                 cur["extra"] = extra
 
+        profile: list[str] = []
         with _engine().begin() as conn:
             _set_org(conn, org_id)
             conn.execute(text("SET LOCAL statement_timeout = 1500"))
             rows = conn.execute(
                 text(
                     """
-                    SELECT e.display, e.email,
+                    SELECT e.id, e.display, e.email,
                            (SELECT count(*) FROM memory_attendees a
                             WHERE a.org_id = e.org_id
                               AND a.entity_id = e.id) AS met,
@@ -1420,6 +1464,8 @@ def lookup_person(query: str, session: Any) -> str:
                 ),
                 {"org_id": org_id, "needle": needle},
             ).mappings().all()
+            if rows:
+                profile = _person_profile(conn, org_id, str(rows[0]["id"]))
         for r in rows:
             extra = ""
             if int(r["met"] or 0) > 0:
@@ -1459,6 +1505,96 @@ def lookup_person(query: str, session: Any) -> str:
             if m["extra"]:
                 line += f" ({m['extra']})"
             lines.append("- " + line)
+        # The profile describes rows[0] specifically — attach it ONLY when
+        # exactly one person matched, or the model could speak one person's
+        # projects/actions under another matched name.
+        if profile and len(matches) == 1:
+            lines.extend("  " + p for p in profile)
         return "People matching (org-scoped):\n" + "\n".join(lines)
     except Exception as e:  # noqa: BLE001 — a tool must answer, not raise
         return f"error: person lookup failed ({type(e).__name__})"
+
+
+def _person_profile(conn, org_id: str, entity_id: str) -> list[str]:
+    """What this person is LINKED to (owner ask 2026-07-31): recent meetings,
+    projects (via attended→about edges), actions they own, and who they most
+    often meet. Distilled display strings only — bounded, never raises the
+    caller (runs inside lookup_person's try + statement_timeout)."""
+    out: list[str] = []
+    meetings = conn.execute(
+        text(
+            """
+            SELECT to_char(m.ended_at, 'MM-DD') AS day, m.meeting_type
+            FROM memory_attendees a
+            JOIN memory_meetings m
+              ON m.org_id = a.org_id AND m.id = a.meeting_id
+            WHERE a.org_id = CAST(:org_id AS uuid) AND a.entity_id = :ent
+            ORDER BY m.ended_at DESC LIMIT 3
+            """
+        ),
+        {"org_id": org_id, "ent": entity_id},
+    ).mappings().all()
+    if meetings:
+        out.append(
+            "recent meetings: "
+            + "; ".join(
+                f"{m['day']} {m['meeting_type'] or 'meeting'}" for m in meetings
+            )
+        )
+    projects = conn.execute(
+        text(
+            """
+            SELECT DISTINCT p.display
+            FROM memory_edges att
+            JOIN memory_edges ab
+              ON ab.org_id = att.org_id AND ab.src_id = att.dst_id
+             AND ab.rel = 'about'
+            JOIN memory_entities p
+              ON p.org_id = ab.org_id AND p.id = ab.dst_id
+             AND p.kind = 'project'
+            WHERE att.org_id = CAST(:org_id AS uuid)
+              AND att.src_id = :ent AND att.rel = 'attended'
+            LIMIT 5
+            """
+        ),
+        {"org_id": org_id, "ent": entity_id},
+    ).scalars().all()
+    if projects:
+        out.append("projects: " + ", ".join(sorted(projects)))
+    owns = conn.execute(
+        text(
+            """
+            SELECT DISTINCT e.display
+            FROM memory_edges o
+            JOIN memory_entities e
+              ON e.org_id = o.org_id AND e.id = o.dst_id
+            WHERE o.org_id = CAST(:org_id AS uuid)
+              AND o.src_id = :ent AND o.rel = 'owns'
+            LIMIT 4
+            """
+        ),
+        {"org_id": org_id, "ent": entity_id},
+    ).scalars().all()
+    if owns:
+        out.append("owns actions: " + "; ".join(o[:80] for o in owns))
+    often = conn.execute(
+        text(
+            """
+            SELECT max(o.display) AS display,
+                   count(DISTINCT o.meeting_id) AS n
+            FROM memory_attendees me
+            JOIN memory_attendees o
+              ON o.org_id = me.org_id AND o.meeting_id = me.meeting_id
+             AND o.entity_id <> me.entity_id
+            WHERE me.org_id = CAST(:org_id AS uuid) AND me.entity_id = :ent
+            GROUP BY o.entity_id ORDER BY n DESC LIMIT 3
+            """
+        ),
+        {"org_id": org_id, "ent": entity_id},
+    ).mappings().all()
+    if often:
+        out.append(
+            "often meets: "
+            + ", ".join(f"{r['display']} ({r['n']}×)" for r in often)
+        )
+    return out

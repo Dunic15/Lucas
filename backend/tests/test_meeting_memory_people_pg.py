@@ -253,6 +253,59 @@ def test_person_lookup_finds_email_and_misses_honestly(mm):
     assert "no one matching" in out
 
 
+def test_projects_and_person_profile(mm, pg):
+    org = _org("p-profile")
+    art = _artifact(
+        "Atlas migration planning with Dana leading.",
+        decisions=["Migrate Atlas on Sept 1"],
+    )
+    art["decision_records"] = [
+        {"decision": "Migrate Atlas on Sept 1", "decision_maker": "Dana Fox",
+         "reason": "contract renewal", "related_project": "Atlas Migration!"}
+    ]
+    art["actions"] = [
+        {"item": "Draft the Atlas runbook", "owner": "Dana Fox",
+         "action_id": "act-p1", "gap_type": "none", "evidence": "x"}
+    ]
+    assert mm.deposit(
+        _session(org, "bot-pr1", "https://zoom.us/j/801",
+                 ("Dana Fox", "Sam Lee")),
+        art,
+    )
+    # Same project as "Atlas-Migration" (hyphen) and "Atlas Migration!"
+    # (punctuation) ⇒ SAME node under punctuation→space normalization.
+    art2 = _artifact("Atlas follow-up.")
+    art2["decision_records"] = [
+        {"decision": "Keep the Atlas cutover date", "decision_maker": "",
+         "reason": "", "related_project": "Atlas-Migration"}
+    ]
+    assert mm.deposit(
+        _session(org, "bot-pr2", "https://zoom.us/j/802",
+                 ("Dana Fox", "Sam Lee")),
+        art2,
+    )
+    with _admin(pg) as conn:
+        n_proj = conn.execute(
+            "SELECT count(*) FROM memory_entities WHERE kind='project'"
+        ).fetchone()[0]
+        assert n_proj == 1  # exact-normalized dedupe
+        rels = dict(
+            conn.execute(
+                "SELECT rel, count(*) FROM memory_edges GROUP BY rel"
+            ).fetchall()
+        )
+        assert rels.get("about", 0) >= 3  # 2 meeting-about + decision-about
+        # decision_maker matched an attendee → person decided edge.
+        assert rels.get("decided", 0) >= 3  # 2 meeting-decided + 1 person
+
+    room = _session(org, "bot-x", "u", ("Sam Lee",))
+    out = mm.lookup_person("dana", room)
+    assert "projects: Atlas-Migration" in out  # latest display, ONE node
+    assert "recent meetings:" in out
+    assert "owns actions: Draft the Atlas runbook" in out
+    assert "often meets: Sam Lee (2×)" in out
+
+
 def test_lookup_uses_session_calendar_people_without_memory(mm):
     org = _org("p-cal-only")
     room = _session(

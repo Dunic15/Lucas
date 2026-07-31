@@ -1241,10 +1241,11 @@ PERSON_LOOKUP_TOOL_SPEC = {
     "function": {
         "name": "person_lookup",
         "description": (
-            "Look up a person this org knows: their email address, whether "
-            "they're an org member, and which remembered meetings they were "
-            "in. Use when someone asks who a person is, for their email or "
-            "contact, or how to reach them. Org-scoped only."
+            "Look up a person this org knows: their email address, recent "
+            "meetings they attended, projects they're linked to, actions "
+            "they own, and who they most often meet. Use when someone asks "
+            "who a person is, for their email or contact, what someone is "
+            "working on, or how to reach them. Org-scoped only."
         ),
         "parameters": {
             "type": "object",
