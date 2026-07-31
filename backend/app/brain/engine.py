@@ -1094,7 +1094,7 @@ Return ONLY a JSON object:
   "risks": ["<each risk or unresolved blocker raised, one short line>"],
   "follow_up_email": {
     "subject": "<subject line>",
-    "body": "<short professional email body summarizing decisions and next steps>"
+    "body": "<short professional email body summarizing decisions, next steps, and open risks>"
   }
 }"""
 

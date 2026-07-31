@@ -145,3 +145,64 @@ def test_fallback_digest_is_dated_and_capped():
 def test_rows_as_input_capped():
     rows = [_row("07-2%d" % (i % 9), "s" * 400) for i in range(40)]
     assert len(meeting_memory._rows_as_input(rows)) <= meeting_memory._DIGEST_INPUT_CHARS
+
+
+# ── risks routing (0013): deposit row + digest carry risks ──────────────────
+
+def test_deposit_row_carries_clipped_risks(monkeypatch):
+    """The deposit row includes risks_json (the 0013 gap fix) — captured via a
+    fake engine so no Postgres is needed."""
+    monkeypatch.setattr(meeting_memory, "enabled", lambda: True)
+    monkeypatch.setattr(
+        meeting_memory.control_plane, "is_durable_org", lambda _o: True
+    )
+    captured = {}
+
+    class _Conn:
+        def execute(self, _sql, params=None):
+            captured.update(params or {})
+
+            class _R:
+                def scalar_one(self):
+                    return "00000000-0000-0000-0000-00000000meet"
+
+            return _R()
+
+    class _Ctx:
+        def __enter__(self):
+            return _Conn()
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(
+        meeting_memory, "_engine",
+        lambda: SimpleNamespace(begin=lambda: _Ctx()),
+    )
+    monkeypatch.setattr(meeting_memory, "_set_org", lambda c, o: None)
+    ok = meeting_memory.deposit(_session(), {
+        "summary": "Kickoff.",
+        "risks": ["Vendor SSO approval is blocked", "", "  "],
+        "decisions": ["Ship Aug 15"],
+    })
+    assert ok is True
+    assert captured["risks_json"] == '["Vendor SSO approval is blocked"]'
+
+
+def test_digest_and_fallback_carry_risks():
+    row = _row("07-29", "Sprint review.", '["Ship on Aug 15"]')
+    row["risks_json"] = '["API migration is blocked on vendor"]'
+    assert "risks: API migration is blocked on vendor" in (
+        meeting_memory._rows_as_input([row])
+    )
+    assert "Risk: API migration is blocked on vendor" in (
+        meeting_memory._fallback_digest([row], 400)
+    )
+
+
+def test_rows_without_risks_column_are_safe():
+    """Pre-0013 rows (no risks_json key) never break the digest."""
+    row = _row("07-29", "Sprint review.", "[]")
+    row.pop("risks_json", None)
+    assert meeting_memory._rows_as_input([row])
+    assert meeting_memory._fallback_digest([row], 400)

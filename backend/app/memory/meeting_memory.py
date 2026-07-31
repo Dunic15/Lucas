@@ -41,9 +41,11 @@ _SUMMARY_CHARS = 2000
 WEEK_BRIEF_SYSTEM = (
     "You compress one company's past week of meetings into working memory for "
     "an AI meeting assistant that is about to join a new meeting. Write at "
-    "most 150 words as short dated lines (format: 'MM-DD — ...'), most recent "
-    "first. Decisions and still-open actions first, then themes. Name people "
-    "and owners when given. Plain text only, no preamble, no headers."
+    "most 150 words as short dated lines (format: 'YYYY-MM-DD — ...'), most "
+    "recent "
+    "first. Decisions and still-open actions first, then open risks, then "
+    "themes. Name people and owners when given. Plain text only, no preamble, "
+    "no headers."
 )
 
 
@@ -156,6 +158,9 @@ def deposit(session: Any, artifact: dict) -> bool:
             "decisions_json": json.dumps(
                 [_clip(d) for d in (artifact.get("decisions") or []) if str(d).strip()]
             ),
+            "risks_json": json.dumps(
+                [_clip(r) for r in (artifact.get("risks") or []) if str(r).strip()]
+            ),
             "actions_json": json.dumps(_distill_actions(artifact.get("actions"))),
             "missing_steps_json": json.dumps(
                 [_clip(s) for s in (artifact.get("missing_steps") or []) if str(s).strip()]
@@ -170,18 +175,20 @@ def deposit(session: Any, artifact: dict) -> bool:
                     INSERT INTO memory_meetings (
                       org_id, bot_id, meeting_key, avatar_id, meeting_type,
                       started_at, ended_at, duration_seconds, readiness_score,
-                      summary, decisions_json, actions_json, missing_steps_json
+                      summary, decisions_json, risks_json, actions_json,
+                      missing_steps_json
                     ) VALUES (
                       CAST(:org_id AS uuid), :bot_id, :meeting_key, :avatar_id,
                       :meeting_type,
                       clock_timestamp() - (:duration_seconds * interval '1 second'),
                       clock_timestamp(), :duration_seconds, :readiness_score,
-                      :summary, :decisions_json, :actions_json,
+                      :summary, :decisions_json, :risks_json, :actions_json,
                       :missing_steps_json
                     )
                     ON CONFLICT (org_id, bot_id) DO UPDATE SET
                       summary = EXCLUDED.summary,
                       decisions_json = EXCLUDED.decisions_json,
+                      risks_json = EXCLUDED.risks_json,
                       actions_json = EXCLUDED.actions_json,
                       missing_steps_json = EXCLUDED.missing_steps_json,
                       readiness_score = EXCLUDED.readiness_score,
@@ -251,8 +258,8 @@ def deposit(session: Any, artifact: dict) -> bool:
 def _window_rows(conn, org_id: str, avatar_id: str) -> list[dict]:
     sql = """
         SELECT bot_id, meeting_key, meeting_type, summary, decisions_json,
-               actions_json, ended_at::text AS ended_at,
-               to_char(ended_at, 'MM-DD') AS day
+               risks_json, actions_json, ended_at::text AS ended_at,
+               to_char(ended_at, 'YYYY-MM-DD') AS day
         FROM memory_meetings
         WHERE org_id = CAST(:org_id AS uuid)
           AND ended_at > clock_timestamp() - interval '7 days'
@@ -269,10 +276,13 @@ def _rows_as_input(rows: list[dict]) -> str:
     lines: list[str] = []
     for r in rows:
         decisions = [d for d in json.loads(r["decisions_json"] or "[]") if d][:3]
+        risks = [x for x in json.loads(r.get("risks_json") or "[]") if x][:2]
         actions = json.loads(r["actions_json"] or "[]")[:3]
         parts = [f"{r['day']} [{r['meeting_type'] or 'meeting'}] {r['summary'][:200]}"]
         if decisions:
             parts.append("decided: " + "; ".join(d[:100] for d in decisions))
+        if risks:
+            parts.append("risks: " + "; ".join(x[:100] for x in risks))
         if actions:
             parts.append(
                 "actions: "
@@ -292,9 +302,12 @@ def _fallback_digest(rows: list[dict], max_chars: int) -> str:
     lines: list[str] = []
     for r in rows:
         decisions = [d for d in json.loads(r["decisions_json"] or "[]") if d]
+        risks = [x for x in json.loads(r.get("risks_json") or "[]") if x]
         line = f"- {r['day']} [{r['meeting_type'] or 'meeting'}]: {r['summary'][:140]}"
         if decisions:
             line += f" Decided: {decisions[0][:100]}"
+        if risks:
+            line += f" Risk: {risks[0][:100]}"
         lines.append(line)
     return "\n".join(lines)[:max_chars]
 

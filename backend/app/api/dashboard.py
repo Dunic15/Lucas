@@ -751,6 +751,39 @@ def dashboard_summary(request: Request) -> JSONResponse:
     )
 
 
+@router.get("/dashboard/status-report")
+def dashboard_status_report(request: Request, avatar_id: str = "laura") -> JSONResponse:
+    """Laura's weekly status report (memory/status_report.py) — the composed
+    RAG one-pager from the last 7 days of meeting memory. Read-only; sending
+    it is the existing email approve door with this body prefilled. Same gate
+    as /dashboard/summary; 404 while the flag is off so the surface simply
+    doesn't exist on deployments that haven't enabled it."""
+    from ..memory import status_report
+
+    if not status_report.enabled():
+        return JSONResponse({"error": "not found"}, status_code=404)
+    from .. import cedric  # local import, same reason as auth.gate's
+
+    user = auth.current_user(request)
+    machine_org = None
+    if user is None:
+        machine_org = cedric.resolve_machine_org(request)
+        if machine_org is None:
+            if err := auth.gate(request):
+                return err
+    caller_org = (user["org_id"] if user else machine_org) or settings.demo_org_id
+    res = status_report.compose(caller_org, (avatar_id or "").strip())
+    if not res.get("ok"):
+        return JSONResponse(
+            {"error": res.get("error") or "unavailable"}, status_code=422
+        )
+    return JSONResponse(
+        {"report": res["report"], "source_meetings": res["source_meetings"],
+         "composed_at": time.time()},
+        headers=_NO_STORE,
+    )
+
+
 @router.post("/dashboard/avatar/{avatar_id}/capability")
 async def set_avatar_capability_endpoint(
     avatar_id: str, request: Request

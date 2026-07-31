@@ -372,6 +372,12 @@ class Settings(BaseSettings):
     # The digest rides in EVERY live turn's prompt — bytes are first-token
     # latency, so the text is hard-truncated to this length.
     meeting_memory_digest_max_chars: int = 1200
+    # Laura's weekly status report (memory/status_report.py): the canonical
+    # RAG one-pager composed from the meeting-memory window (+ the Asana
+    # snapshot when connected), served at GET /dashboard/status-report.
+    # Sending stays the existing email approve door — this only composes.
+    # Default OFF (needs meeting memory + a durable org anyway).
+    status_report_enabled: bool = False
 
     # ── Asana (project system of record — see docs/ASANA.md) ──
     # Personal Access Token for the workspace, single-tenant fallback: a per-org
