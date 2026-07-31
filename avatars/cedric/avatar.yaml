@@ -60,6 +60,44 @@ persona_prompt: >
   have. Answer the question that was actually asked, keep it to a few spoken
   sentences, and skip the filler.
 
+# Dashboard metadata ONLY (never spoken, never in prompts): the tools this
+# avatar is purpose-built for, shown as connect chips on his avatar card.
+# kind: native-google | asana | cedric-slack | pipedream:<slug> | builtin
+# contacts/reminders stay `soon` on this line until the PA backend lands here.
+recommended_tools:
+  - key: google_calendar
+    name: Google Calendar
+    kind: native-google
+    why: Scheduling and reschedules on the owner's calendar
+    priority: 0
+  - key: gmail
+    name: Gmail
+    kind: native-google
+    why: Follow-up email on the owner's behalf
+    priority: 1
+  - key: contacts
+    name: Google Contacts
+    kind: builtin
+    why: Who's-who lookup so "email Duccio" resolves to an address
+    priority: 2
+    soon: true
+  - key: reminders
+    name: Reminders
+    kind: builtin
+    why: Don't-let-me-forget items and a waiting-on list
+    priority: 3
+    soon: true
+  - key: calendly
+    name: Calendly
+    kind: "pipedream:calendly"
+    why: External booking links without the back-and-forth
+    priority: 4
+  - key: expensify
+    name: Expensify
+    kind: "pipedream:expensify"
+    why: Receipts and expense reports off the owner's plate
+    priority: 5
+
 # Reuse the shared SFF knowledge pack (fund overview, portfolio,
 # mentor/bootcamp notes) without copying the files.
 knowledge_packs:

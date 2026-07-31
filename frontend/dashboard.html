@@ -306,6 +306,11 @@
   .chips{display:flex;flex-wrap:wrap;gap:6px;}
   .chip{font-size:.76rem;padding:4px 10px;border-radius:999px;background:var(--panel-2);border:1px solid var(--line-soft);color:var(--dim);}
   .chip.tmpl{border-color:rgba(126,182,255,.3);color:var(--live);}
+  /* Avatar-card tool chips: connected / connect-door / roadmap states. */
+  .chip.tool-on{border-color:rgba(94,210,144,.4);color:var(--live);}
+  .chip.tool-add{border-color:rgba(126,182,255,.45);color:var(--fg);cursor:pointer;text-decoration:none;display:inline-block;background:transparent;font-family:inherit;}
+  .chip.tool-add:hover{background:var(--panel-2);}
+  .chip.tool-soon{opacity:.55;cursor:default;}
   .conns-list{display:flex;flex-direction:column;gap:8px;}
   .crow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid var(--line-soft);border-radius:12px;background:var(--panel-2);}
   .crow .cn{font-size:.87rem;font-weight:500;}
@@ -3919,12 +3924,32 @@
       var nm=(ct[k].name||k);
       return capRowHTML(a,k,nm,capIcon(k,nm));
     }).join("");
-    // Order: the connected Pipedream tools first, then Asana (Petra), then the
-    // Slack agent add-on LAST (it's the optional Cedric bridge, not a primary).
+    // The Asana toggle renders on avatars purpose-built for it: Petra, plus
+    // any avatar whose recommended_tools declares an asana entry (Laura) —
+    // driven by config, not a hardcoded id list.
+    var hasAsana = a.id==="petra" ||
+      (a.recommended_tools||[]).some(function(t){return t.kind==="asana";});
+    // Tool chips: the avatar's recommended_tools with connect state. Three
+    // states — connected (✓), connect door (+, per-kind: plain hrefs for
+    // Google/Pipedream, a Connections jump for Asana), soon (muted).
+    var toolChips=(a.recommended_tools||[]).map(function(t){
+      var tip = t.why ? ' title="'+esc(t.why)+'"' : '';
+      if(t.soon) return '<span class="chip tool-soon"'+tip+'>'+esc(t.name)+' · soon</span>';
+      if(t.connected) return '<span class="chip tool-on"'+tip+'>✓ '+esc(t.name)+'</span>';
+      var c=t.connect||{};
+      if(c.type==="href") return '<a class="chip tool-add"'+tip+' href="'+esc(c.url)+'">+ '+esc(t.name)+'</a>';
+      return '<button class="chip tool-add"'+tip+' data-tool-goto="connections">+ '+esc(t.name)+'</button>';
+    }).join("");
+    var toolsHtml = toolChips
+      ? '<div class="sm-h" style="margin-top:10px">Tools</div><div class="chips">'+toolChips+'</div>'
+      : '';
+    // Order: the connected Pipedream tools first, then Asana (declared), then
+    // the Slack agent add-on LAST (the optional Cedric bridge, not a primary).
     return '<div class="caps"><div class="sm-h">Capabilities</div><div class="cap-list">'+
         pdRows+
-        (a.id==="petra"?capRowHTML(a,"asana","Asana",LOGO_ASANA):"")+
+        (hasAsana?capRowHTML(a,"asana","Asana",LOGO_ASANA):"")+
         capRowHTML(a,"slack","Slack agent",LOGO_SLACK)+'</div>'+
+        toolsHtml+
         '</div>';
         // AI-model picker removed (2026-07-22): Gemini is env-gated only after
         // the 2026-07-21 relay hijack — one grounded brain, no per-avatar toggle.
@@ -3942,9 +3967,7 @@
           '<span class="al-addr">'+esc(a.email)+'</span><button class="btn conn-btn" data-copy="'+esc(a.email)+'">Copy</button></div>'+
           '<div class="al-hint">Add this address to any calendar invite — '+esc(a.name)+' joins the meeting.</div></div>':'')+
         '<div class="acts"><button class="btn primary" data-dispatch="'+esc(a.id)+'">Use for next meeting</button>'+
-        (a.id==="laura"
-          ? '<span class="btn" title="Ultra HD photorealistic avatar — in the works, not live yet" style="opacity:.55;cursor:default">🎬 Ultra HD realistic avatar · coming soon</span>'
-          : '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a>')+
+        '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a>'+
         '</div>'+
       '<div class="avinfo" style="margin-top:14px">'+
       '<details data-avsec="more"><summary>More about '+esc(a.name)+'</summary><div class="dsec">'+
@@ -4017,6 +4040,10 @@
     }); });
     $$("#view-avatars [data-goto-conn]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation(); go("connections"); }); });
+    // Tool chips: the Asana door jumps to the Connections view (PAT/OAuth
+    // lives there); Google/Pipedream chips are plain <a href> doors.
+    $$("#view-avatars [data-tool-goto]").forEach(function(b){ b.addEventListener("click",function(e){
+      e.stopPropagation(); go(b.getAttribute("data-tool-goto")); }); });
   }
 
   function renderChart(weekly){

@@ -53,9 +53,10 @@ def test_unknown_fields_and_secrets_are_rejected():
 
 
 def test_capability_widening_is_rejected():
-    # laura's ceiling is the baseline (google, slack) — asana is Petra-only.
+    # laura declares asana since her PM specialization — her ceiling now
+    # includes it, so the widening probe uses a tool NO avatar declares.
     clean, errors = avatar_overlay.validate_overlay(
-        _laura(), {"enabled_tools": ["google", "asana"]}
+        _laura(), {"enabled_tools": ["google", "github"]}
     )
     assert any("widen" in e for e in errors)
     # Narrowing is fine, and [] (no tools) stays distinct from absent.

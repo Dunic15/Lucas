@@ -182,12 +182,13 @@ def test_tool_specs_expose_the_new_tools():
     assert "list_capabilities" in names and "search_tools" in names
 
 
-# ── Asana is Petra-only (avatar-gated native tool) ──────────────────────────
+# ── Asana is declaration-gated (avatar-gated native tool) ───────────────────
 
 def test_asana_tool_is_petra_only(fresh_store, monkeypatch):
-    """Asana appears in the tool brief ONLY for the avatar built for it (Petra
-    declares native_tools:[asana]); every other avatar's brief omits it even
-    when the org has connected Asana. Google Calendar stays baseline for all."""
+    """Asana appears in the tool brief ONLY for avatars built for it (Petra
+    and — since her PM specialization — Laura declare native_tools:[asana]);
+    every other avatar's brief omits it even when the org has connected Asana.
+    Google Calendar stays baseline for all."""
     from app import asana_client, avatars
 
     st = fresh_store
@@ -198,14 +199,17 @@ def test_asana_tool_is_petra_only(fresh_store, monkeypatch):
 
     petra = tool_registry.assemble("org-x", avatars.load("petra"))
     laura = tool_registry.assemble("org-x", avatars.load("laura"))
+    cedric = tool_registry.assemble("org-x", avatars.load("cedric"))
     petra_names = [t["name"] for t in petra["native"]]
     laura_names = [t["name"] for t in laura["native"]]
+    cedric_names = [t["name"] for t in cedric["native"]]
 
     assert "asana_tasks" in petra_names          # Petra owns Asana
-    assert "asana_tasks" not in laura_names       # Laura never sees it
-    # Google Calendar + Gmail are baseline for BOTH
+    assert "asana_tasks" in laura_names          # Laura the PM owns it too
+    assert "asana_tasks" not in cedric_names     # the PA never sees it
+    # Google Calendar + Gmail are baseline for ALL
     assert "google_calendar" in petra_names and "google_calendar" in laura_names
-    assert "gmail_send" in petra_names and "gmail_send" in laura_names
+    assert "gmail_send" in petra_names and "gmail_send" in cedric_names
 
 
 def test_asana_off_for_petra_when_org_not_connected(fresh_store, monkeypatch):

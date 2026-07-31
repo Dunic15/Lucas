@@ -8,14 +8,53 @@
 
 id: laura
 name: Laura
-role: ultra HD avatar
-
-# Keep Laura off the dashboard "Your avatars" roster (same mechanism as the
-# sff knowledge pack). She still loads and dispatches normally.
-hidden: true
+role: AI project manager
 
 # One-line, user-facing summary for the dashboard card (NOT the spoken persona).
-description: coming soon
+description: >-
+  Project manager for your team's meetings — action items into the tracker,
+  recaps, status, decisions and risks — with your approval.
+
+# Native tools this avatar is purpose-built for (same gate Petra uses):
+# unlocks the Asana toggle default and the Asana-gated paths.
+native_tools:
+  - asana
+
+# Dashboard metadata ONLY (never spoken, never in prompts): the tools this
+# avatar is purpose-built for, shown as connect chips on her avatar card.
+# kind: native-google | asana | cedric-slack | pipedream:<slug> | builtin
+recommended_tools:
+  - key: asana
+    name: Asana
+    kind: asana
+    why: Action items land in the team's tracker with owner and due date
+    priority: 0
+  - key: gmail
+    name: Gmail
+    kind: native-google
+    why: Recap and status emails, sent after your approval
+    priority: 1
+  - key: google_calendar
+    name: Google Calendar
+    kind: native-google
+    why: Follow-up meetings and ceremonies on the team calendar
+    priority: 2
+  - key: status_reports
+    name: Weekly status reports
+    kind: builtin
+    why: One-page RAG status composed from the week's meetings
+    priority: 3
+    soon: true
+  - key: notion
+    name: Notion
+    kind: "pipedream:notion"
+    why: Meeting minutes and the decision log in the team wiki
+    priority: 4
+  - key: jira
+    name: Jira
+    kind: "pipedream:jira"
+    why: For teams that track work in Jira instead of Asana
+    priority: 5
 
 # Names that "call" this avatar into the conversation. Add nicknames here.
 # (Case-insensitive. The avatar only speaks when one of these is said.)

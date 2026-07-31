@@ -563,6 +563,56 @@ def _capabilities(avatar: avatars.Avatar, knowledge: int) -> list[str]:
     return caps
 
 
+def _recommended_tools_payload(
+    avatar: avatars.Avatar,
+    *,
+    google_connected: bool,
+    slack_connected: bool,
+    asana_connected: bool,
+    pd_connected: set[str],
+) -> list[dict]:
+    """The avatar card's tool chips: the yaml-declared recommended_tools
+    enriched with org connect state and the connect door the frontend should
+    render. `pd_connected` = the connected Pipedream slugs the summary already
+    fetched (no extra I/O here). A `soon` tool gets no door regardless."""
+    out: list[dict] = []
+    for t in avatar.recommended_tools or []:
+        kind = t["kind"]
+        connect: dict | None = None
+        if kind == "native-google":
+            connected = google_connected
+            if not connected:
+                connect = {"type": "href", "url": "/oauth/google/connect"}
+        elif kind == "asana":
+            connected = asana_connected
+            if not connected:
+                connect = {"type": "view", "view": "connections"}
+        elif kind == "cedric-slack":
+            connected = slack_connected
+            if not connected:
+                connect = {
+                    "type": "href",
+                    "url": (
+                        "/dashboard/connections/brain/slack/start"
+                        f"?avatar_id={avatar.id}&channel="
+                    ),
+                }
+        elif kind.startswith("pipedream:"):
+            slug = kind.split(":", 1)[1]
+            connected = slug in pd_connected
+            if not connected:
+                connect = {
+                    "type": "href",
+                    "url": f"/dashboard/pipedream/connect?app={slug}",
+                }
+        else:  # builtin
+            connected = True
+        if t["soon"]:
+            connect = None
+        out.append({**t, "connected": connected, "connect": connect})
+    return out
+
+
 def _hidden(avatar_id: str) -> bool:
     """Read the avatar.yaml `hidden` flag without depending on the Avatar
     dataclass (a parallel session may own avatars.py). Knowledge-pack folders
@@ -876,17 +926,23 @@ def dashboard_summary(request: Request) -> JSONResponse:
     # colliding with the native toggle keys are excluded — those families
     # already have a switch above.
     pd_apps: list[dict] = []
+    # ALL connected Pipedream slugs (incl. the native trio) — feeds the
+    # recommended-tools chips' connect state; same single accounts read.
+    pd_connected_slugs: set[str] = set()
     if pipedream_executor.enabled() and caller_org:
         try:
             _pd_seen: set[str] = set()
             for _acct in pipedream_client.list_accounts(caller_org):
                 _slug = str(_acct.get("app") or "")
+                if _slug:
+                    pd_connected_slugs.add(_slug)
                 if (_slug and _slug not in _pd_seen
                         and _slug not in ("google", "slack", "asana")):
                     _pd_seen.add(_slug)
                     pd_apps.append({"slug": _slug, "name": _slug.replace("_", " ").title()})
         except pipedream_client.PipedreamError:
             pd_apps = []
+            pd_connected_slugs = set()
     all_caps = store.all_avatar_capabilities()  # {avatar_id: {cap: bool}} — one read
     # Per-org roster: a scoped caller (cookie user or per-org bearer) sees only
     # their org's granted avatars (org_agents); the unscoped worlds see ALL —
@@ -925,6 +981,13 @@ def dashboard_summary(request: Request) -> JSONResponse:
                 "knowledge_topics": _knowledge_topics(a),
                 "process_templates": _process_templates(a),
                 "capabilities": _capabilities(a, knowledge),
+                "recommended_tools": _recommended_tools_payload(
+                    a,
+                    google_connected=google_connected,
+                    slack_connected=slack_connected,
+                    asana_connected=asana_connected,
+                    pd_connected=pd_connected_slugs,
+                ),
                 "drive_folder": bool(a.drive_folder_id),
                 # Per-avatar brain choice for the dashboard toggle: the stored
                 # choice, else derived from the effective (global) mode.
