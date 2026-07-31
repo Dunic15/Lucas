@@ -110,6 +110,8 @@ class Avatar:
         preferred_ready = (
             photoreal_ready if self.page == "photoreal"
             else talk_ready if self.page == "talk"
+            # portrait renders the same reference JPG the photoreal tier uses
+            else photoreal_ready if self.page == "portrait"
             else bool(self.anam_avatar_id)
         )
         return {
@@ -118,6 +120,7 @@ class Avatar:
             "ready": preferred_ready,
             "talk": {"ready": talk_ready, "asset": talk_name},
             "photoreal": {"ready": photoreal_ready, "asset": portrait_name},
+            "portrait": {"ready": photoreal_ready, "asset": portrait_name},
         }
 
     @property
@@ -233,11 +236,12 @@ def load(avatar_id: str) -> Avatar:
         silent=bool(raw.get("silent", False)),
         # face tier: only the known page names pass; anything else falls back
         # to "" (= global default) rather than producing a 404 camera URL.
-        face=(lambda f: f if f in ("talk", "photoreal", "avatar") else "")(
+        face=(lambda f: f if f in ("talk", "photoreal", "avatar", "portrait") else "")(
             str(_coalesce(raw.get("face"), "")).strip().lower()
         ),
         face_fallback=(
-            lambda f: f if f in ("talk", "photoreal", "avatar", "none") else "talk"
+            lambda f: f if f in ("talk", "photoreal", "avatar", "portrait", "none")
+            else "talk"
         )(str(_coalesce(raw.get("face_fallback"), "talk")).strip().lower()),
         talk_model=str(_coalesce(raw.get("talk_model"), f"{avatar_id}.glb")).strip(),
         photoreal_reference=str(

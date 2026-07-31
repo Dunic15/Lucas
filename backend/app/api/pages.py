@@ -59,6 +59,17 @@ def talk_page() -> FileResponse:
     )
 
 
+@router.get("/portrait")
+def portrait_page() -> FileResponse:
+    """Portrait avatar page: the avatar's dashboard profile picture with an
+    animated speaking ring — the lightweight face tier (no GPU, no 3D). Same
+    speak contract as /talk (SSE + poll, {type:"speak"}, /tts, speaking
+    reports); only the renderer differs."""
+    return FileResponse(
+        FRONTEND_DIR / "portrait.html", headers={"Cache-Control": "no-store"}
+    )
+
+
 @router.get("/photoreal")
 def photoreal_page() -> FileResponse:
     """Photoreal avatar page (Stage 2): GPU-streamed MuseTalk face. Same speak

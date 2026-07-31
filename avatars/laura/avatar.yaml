@@ -102,10 +102,11 @@ tasks:
 # Knowledge lives in:  avatars/laura/knowledge/*.md
 # Drop more .md files there and re-run:  python backend/scripts/ingest.py
 
-# Face: same mechanism as Cedric (talk-first 3D, photoreal fallback) —
-# owner request 2026-07-31. Identity-safe: only Laura's own assets, ever.
-face: talk
-face_fallback: photoreal
+# Face: portrait tier (owner request 2026-07-31) — her dashboard profile
+# picture with an animated speaking ring (frontend/portrait.html). No GPU,
+# no 3D on the hot path. Identity-safe: only Laura's own assets, ever.
+face: portrait
+face_fallback: talk
 talk_model: laura.glb
 talk_body: F
 photoreal_reference: reference-laura.jpg
