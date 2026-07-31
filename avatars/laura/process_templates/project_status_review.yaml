@@ -1,0 +1,18 @@
+# Process template: a project status review must actually review the project —
+# progress vs plan, blockers with owners, risks, and concrete next steps with
+# dates. MeetingState tracks these silently; critical_gaps still open at
+# wrap-up trigger the avatar's one polite closing intervention ("we never assigned
+# an owner to the blocker…").
+id: project_status_review
+name: Project Status Review
+required_steps:
+  - progress_reviewed     # status vs plan actually stated (on track / at risk)
+  - blockers_discussed    # blockers named — each needs an owner
+  - owners_assigned       # actions/blockers have a person attached
+  - deadlines_confirmed   # dates checked or (re)committed
+  - risks_reviewed        # top risks looked at, not just issues
+  - next_steps_defined    # concrete next actions before the next review
+critical_gaps:
+  - blockers_discussed
+  - owners_assigned
+  - next_steps_defined

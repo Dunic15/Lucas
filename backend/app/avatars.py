@@ -10,6 +10,7 @@ uses. Adding an avatar = adding a folder. No code changes. See avatars/README.md
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -83,6 +84,11 @@ class Avatar:
     # Calendar + Gmail are NOT listed here: they are BASELINE for every avatar.
     # [] = only the baseline tools.
     native_tools: list[str] = None  # type: ignore[assignment]
+    # Dashboard-only metadata: the tools this avatar is purpose-built for,
+    # shown as connect chips on its avatar card. Each entry is
+    # {key, name, kind, why, priority, soon} — see _normalize_recommended_tools.
+    # Never folded into prompts or spoken; [] = no chips = card unchanged.
+    recommended_tools: list[dict] = None  # type: ignore[assignment]
 
     def uses_native_tool(self, name: str) -> bool:
         """Whether this avatar is purpose-built for a gated native tool."""
@@ -185,6 +191,49 @@ def _normalize_tasks(raw_tasks) -> list[dict]:
     return out
 
 
+# Connector kinds the dashboard knows how to render a connect door for. A
+# pipedream kind carries its app slug ("pipedream:notion"); everything else is
+# an exact literal. Unknown kinds are dropped so a yaml typo can never put a
+# doorless chip on the card.
+_RECOMMENDED_KINDS = ("native-google", "asana", "cedric-slack", "builtin")
+_PIPEDREAM_SLUG_RE = re.compile(r"^pipedream:[a-z0-9_-]+$")
+
+
+def _normalize_recommended_tools(raw_tools) -> list[dict]:
+    """avatar.yaml ``recommended_tools`` -> clean, sorted card-chip entries.
+
+    Dashboard metadata only. Each entry: ``key`` (stable machine key) and
+    ``name`` (chip label) are required; ``kind`` must be a known connector
+    kind; ``why`` (tooltip), ``priority`` (sort, default 99) and ``soon``
+    (muted roadmap chip, no connect door) are optional. Malformed entries are
+    dropped; missing/blank yields ``[]`` (card identical to today)."""
+    out: list[dict] = []
+    for entry in raw_tools or []:
+        if not isinstance(entry, dict):
+            continue
+        key = str(entry.get("key") or "").strip().lower()
+        name = str(entry.get("name") or "").strip()
+        kind = str(entry.get("kind") or "").strip().lower()
+        if not key or not name or not re.fullmatch(r"[a-z0-9_]+", key):
+            continue
+        if kind not in _RECOMMENDED_KINDS and not _PIPEDREAM_SLUG_RE.fullmatch(kind):
+            continue
+        try:
+            priority = int(entry.get("priority", 99))
+        except (TypeError, ValueError):
+            priority = 99
+        out.append({
+            "key": key,
+            "name": name,
+            "kind": kind,
+            "why": str(entry.get("why") or "").strip(),
+            "priority": priority,
+            "soon": bool(entry.get("soon", False)),
+        })
+    out.sort(key=lambda t: (t["priority"], t["name"]))
+    return out
+
+
 # Config cache. The live webhook loads the avatar on EVERY transcript event —
 # and partial events arrive several times a second while anyone talks — so an
 # uncached YAML read is sync disk I/O on the hot path. Keyed by path + mtime:
@@ -252,6 +301,7 @@ def load(avatar_id: str) -> Avatar:
         native_tools=[
             str(t).strip().lower() for t in (raw.get("native_tools") or []) if str(t).strip()
         ],
+        recommended_tools=_normalize_recommended_tools(raw.get("recommended_tools")),
         dir=folder,
         knowledge_packs=[str(k) for k in (raw.get("knowledge_packs") or [])],
     )

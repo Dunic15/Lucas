@@ -194,6 +194,53 @@ def _capabilities(avatar: avatars.Avatar, knowledge: int) -> list[str]:
     return caps
 
 
+def _recommended_tools_payload(
+    avatar: avatars.Avatar,
+    *,
+    google_connected: bool,
+    slack_connected: bool,
+    asana_connected: bool,
+) -> list[dict]:
+    """The avatar card's tool chips: the yaml-declared recommended_tools
+    enriched with org connect state and the connect door the frontend should
+    render. `connected` is None for pipedream tools — the client overlays it
+    from its cached /dashboard/connections/pipedream/accounts read (that call
+    does network I/O + a sync side-effect and must never run in this handler).
+    A `soon` tool gets no door regardless of state."""
+    out: list[dict] = []
+    for t in avatar.recommended_tools or []:
+        kind = t["kind"]
+        connected: bool | None
+        connect: dict | None = None
+        if kind == "native-google":
+            connected = google_connected
+            if not connected:
+                connect = {"type": "href", "url": "/oauth/google/connect"}
+        elif kind == "asana":
+            connected = asana_connected
+            if not connected:
+                connect = {"type": "view", "view": "connections"}
+        elif kind == "cedric-slack":
+            connected = slack_connected
+            if not connected:
+                connect = {
+                    "type": "href",
+                    "url": (
+                        "/dashboard/connections/brain/slack/start"
+                        f"?avatar_id={avatar.id}&channel="
+                    ),
+                }
+        elif kind.startswith("pipedream:"):
+            connected = None
+            connect = {"type": "pipedream", "slug": kind.split(":", 1)[1]}
+        else:  # builtin
+            connected = True
+        if t["soon"]:
+            connect = None
+        out.append({**t, "connected": connected, "connect": connect})
+    return out
+
+
 def _hidden(avatar_id: str) -> bool:
     """Read the avatar.yaml `hidden` flag without depending on the Avatar
     dataclass (a parallel session may own avatars.py). Knowledge-pack folders
@@ -508,6 +555,12 @@ def dashboard_summary(request: Request) -> JSONResponse:
                 "knowledge_topics": _knowledge_topics(a),
                 "process_templates": _process_templates(a),
                 "capabilities": _capabilities(a, knowledge),
+                "recommended_tools": _recommended_tools_payload(
+                    a,
+                    google_connected=google_connected,
+                    slack_connected=slack_connected,
+                    asana_connected=asana_connected,
+                ),
                 "drive_folder": bool(a.drive_folder_id),
                 # Per-avatar brain choice for the dashboard toggle: the stored
                 # choice, else derived from the effective (global) mode.

@@ -267,6 +267,11 @@
   .chips{display:flex;flex-wrap:wrap;gap:6px;}
   .chip{font-size:.76rem;padding:4px 10px;border-radius:999px;background:var(--panel-2);border:1px solid var(--line-soft);color:var(--dim);}
   .chip.tmpl{border-color:rgba(126,182,255,.3);color:var(--live);}
+  /* Avatar-card tool chips: connected / connect-door / roadmap states. */
+  .chip.tool-on{border-color:rgba(94,210,144,.4);color:var(--live);}
+  .chip.tool-add{border-color:rgba(126,182,255,.45);color:var(--fg);cursor:pointer;text-decoration:none;display:inline-block;background:transparent;font-family:inherit;}
+  .chip.tool-add:hover{background:var(--panel-2);}
+  .chip.tool-soon{opacity:.55;cursor:default;}
   .conns-list{display:flex;flex-direction:column;gap:8px;}
   .crow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid var(--line-soft);border-radius:12px;background:var(--panel-2);}
   .crow .cn{font-size:.87rem;font-weight:500;}
@@ -851,6 +856,28 @@
 
   var token=localStorage.getItem("LAURA_API_TOKEN")||"";
   function headers(){ var h={"Content-Type":"application/json"}; if(token) h["Authorization"]="Bearer "+token; return h; }
+  // Pipedream accounts — fetched ONCE per page load, shared by the Connections
+  // card and the avatar-card tool chips. The endpoint 503s when the action
+  // plane isn't configured (prod without the dev gateway) → ok:false and every
+  // pipedream chip/card stays hidden. `slugs` = lowercased connected app slugs.
+  // Sync snapshot (_pdSnap) because the card renderers build strings
+  // synchronously; the 15s poll re-render picks the resolved state up.
+  var _pdSnap={ready:false,ok:false,slugs:{}};
+  var _pdPromise=null;
+  function pdAccounts(){
+    if(_pdPromise) return _pdPromise;
+    _pdPromise=fetch("/dashboard/connections/pipedream/accounts",{headers:headers()})
+      .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+      .then(function(j){
+        if(!j.ok) throw 0;
+        var slugs={};
+        (j.accounts||[]).forEach(function(a){ if(a.app) slugs[String(a.app).toLowerCase()]=true; });
+        _pdSnap={ready:true,ok:true,accounts:j.accounts||[],slugs:slugs};
+        return _pdSnap; })
+      .catch(function(){ _pdSnap={ready:true,ok:false,accounts:[],slugs:{}}; return _pdSnap; });
+    return _pdPromise;
+  }
+  pdAccounts();
   function toast(msg,err){ var t=document.createElement("div"); t.className="toast"+(err?" err":""); t.setAttribute("role",err?"alert":"status"); t.innerHTML='<span class="dt"></span>'+esc(msg);
     $("#toasts").appendChild(t); setTimeout(function(){ t.style.opacity="0"; t.style.transition="opacity .3s"; setTimeout(function(){t.remove();},300); },3000); }
   var query=new URLSearchParams(window.location.search);
@@ -1130,12 +1157,36 @@
       // explanatory copy is ERASED: the old "connect once in Connections…" note
       // and the per-model description lines are gone; only the controls remain.
       // ALL #220/#221 wiring (endpoints + data attributes) is unchanged.
-      // Asana is Petra's domain (capability gating: google=all, asana=Petra,
-      // slack=Cedric) — the Asana toggle renders ONLY on Petra's card, so
-      // Cedric/Laura can't be toggled onto a tool they shouldn't drive.
+      // The Asana toggle renders on avatars purpose-built for it: Petra, plus
+      // any avatar whose recommended_tools declares an asana entry (Laura) —
+      // driven by config, not a hardcoded id list.
+      var hasAsana = a.id==="petra" ||
+        (a.recommended_tools||[]).some(function(t){return t.kind==="asana";});
+      // Tool chips: the avatar's recommended_tools with connect state. Three
+      // states — connected (✓), connect door (+, per-kind), soon (muted).
+      // Pipedream chips need the accounts snapshot: hidden until it resolves
+      // ok (the 15s re-render picks it up), hidden for good on 503.
+      var toolChips=(a.recommended_tools||[]).map(function(t){
+        var isPd = t.kind.indexOf("pipedream:")===0;
+        if(isPd && !_pdSnap.ok) return "";
+        var connected = t.connected===null
+          ? !!_pdSnap.slugs[(t.connect&&t.connect.slug)||t.kind.split(":")[1]]
+          : !!t.connected;
+        var tip = t.why ? ' title="'+esc(t.why)+'"' : '';
+        if(t.soon) return '<span class="chip tool-soon"'+tip+'>'+esc(t.name)+' · soon</span>';
+        if(connected) return '<span class="chip tool-on"'+tip+'>✓ '+esc(t.name)+'</span>';
+        var c=t.connect||{};
+        if(c.type==="href") return '<a class="chip tool-add"'+tip+' href="'+esc(c.url)+'">+ '+esc(t.name)+'</a>';
+        if(c.type==="pipedream") return '<button class="chip tool-add"'+tip+' data-tool-pd="'+esc(c.slug)+'">+ '+esc(t.name)+'</button>';
+        return '<button class="chip tool-add"'+tip+' data-tool-goto="connections">+ '+esc(t.name)+'</button>';
+      }).join("");
+      var toolsHtml = toolChips
+        ? '<div class="sm-h" style="margin-top:10px">Tools</div><div class="chips">'+toolChips+'</div>'
+        : '';
       var capHtml='<div class="caps"><div class="sm-h">Capabilities</div><div class="cap-list">'+
           capRow(a,"slack","Slack agent",LOGO_SLACK)+capRow(a,"google","Google",LOGO_GOOGLE)+
-          (a.id==="petra"?capRow(a,"asana","Asana",LOGO_ASANA):"")+'</div>'+
+          (hasAsana?capRow(a,"asana","Asana",LOGO_ASANA):"")+'</div>'+
+          toolsHtml+
           '<div class="modelpick sm"><div class="sm-h">AI model</div><div class="mp-row">'+
             '<button class="mp-opt'+(a.brain==="gemini"?" on":"")+'" data-brain-set="gemini" data-brain-av="'+esc(a.id)+'">Gemini</button>'+
             '<button class="mp-opt'+(a.brain==="cerebras"?" on":"")+'" data-brain-set="cerebras" data-brain-av="'+esc(a.id)+'">Cerebras</button></div>'+
@@ -1151,9 +1202,7 @@
             '<span class="al-addr">'+esc(a.email)+'</span><button class="btn conn-btn" data-copy="'+esc(a.email)+'">Copy</button></div>'+
             '<div class="al-hint">Add this address to any calendar invite — '+esc(a.name)+' joins the meeting.</div></div>':'')+
           '<div class="acts"><button class="btn primary" data-dispatch="'+esc(a.id)+'">Send to a meeting</button>'+
-          (a.id==="laura"
-            ? '<span class="btn" title="Ultra HD photorealistic avatar — in the works, not live yet" style="opacity:.55;cursor:default">🎬 Ultra HD realistic avatar · coming soon</span>'
-            : '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a>')+
+          '<a class="btn" style="text-decoration:none" href="/talk?avatar_id='+encodeURIComponent(a.id)+'&body='+esc(a.talk_body)+'" target="_blank" rel="noopener">Talk to '+esc(a.name)+'</a>'+
           '</div>'+
           '</div>'+
           '<aside class="avd-right">'+capHtml+'</aside>'+
@@ -1202,6 +1251,24 @@
     // view, never on the card.
     $$("#av-grid [data-goto-conn]").forEach(function(b){ b.addEventListener("click",function(e){
       e.stopPropagation(); go("connections"); }); });
+    // Tool chips: [data-tool-goto] navigates to the Connections view (Asana
+    // door); [data-tool-pd] runs the per-app Pipedream connect flow inline
+    // (same POST + new-tab + reload-toast contract as the App Library card).
+    $$("#av-grid [data-tool-goto]").forEach(function(b){ b.addEventListener("click",function(e){
+      e.stopPropagation(); go(b.getAttribute("data-tool-goto")); }); });
+    $$("#av-grid [data-tool-pd]").forEach(function(b){ b.addEventListener("click",function(e){
+      e.stopPropagation(); b.disabled=true;
+      fetch("/dashboard/connections/pipedream/connect",{method:"POST",headers:headers(),
+        body:JSON.stringify({app:b.getAttribute("data-tool-pd")})})
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if(!j.ok) throw new Error(j.error||"Couldn't create the connect link");
+          window.open(j.url,"_blank","noopener");
+          toast("Authorize in the new tab, then reload this page — the app becomes an avatar tool automatically.");
+          b.disabled=false; })
+        .catch(function(err){ toast(err.message||"Couldn't create the connect link.",true);
+          b.disabled=false; });
+    }); });
     // (The org-level Cedric brain connect/disconnect + its connector catalog now
     // live ONLY in the Connections view — see #conns further below. The card no
     // longer duplicates them; on the card Slack is just the per-avatar toggle.)
@@ -1963,6 +2030,19 @@
       '<div class="foot"><span class="cstat"><b></b>Not connected</span>'+
       '<button class="btn primary" data-jira-soon>Connect Jira</button>'+
       '</div></div>'+
+      // ── Asana (native) — the org's own tracker connection: OAuth one-click
+      // when the deployment has the Asana app configured, else a pasted PAT.
+      // Status + handlers (data-asana-on/off) were already wired below; this
+      // card is their (previously missing) markup. ──
+      '<div class="conn"><div class="nm">'+LOGO_ASANA+' Asana <span class="stchip" style="margin-left:6px">native</span></div>'+
+      '<div class="ds">Action items from meetings land in your Asana workspace as tasks with owner and due date — after your approval. Powers the Asana toggle on Petra and Laura.</div>'+
+      '<div class="foot"><span class="cstat'+(asanaConnected?" on":"")+'"><b></b>'+(asanaConnected?"Connected":"Not connected")+'</span>'+
+      (asanaConnected
+        ?'<button class="btn" data-asana-off>Disconnect</button>'
+        :(asanaOAuth
+          ?'<a class="btn primary" style="text-decoration:none" href="/oauth/asana/connect">Connect</a>'
+          :'<input id="asana-pat" type="password" placeholder="Asana Personal Access Token" style="flex:1;min-width:0"/><button class="btn primary" data-asana-on>Connect</button>'))+
+      '</div></div>'+
       // ── Google Calendar (native) — the avatars' own Google, independent of
       // Cedric. Shares one Google sign-in with Gmail (/oauth/google/connect
       // grants both); googleNative drives status for both cards. ──
@@ -1999,10 +2079,11 @@
         }).join("")||'<span class="cnote">Nothing connected yet — search below.</span>';
       }
       // Listing accounts also triggers the server-side tool sync, so a reload
-      // after an OAuth completes is all it takes to arm the agent.
-      fetch("/dashboard/connections/pipedream/accounts",{headers:headers()})
-        .then(function(r){ if(!r.ok) throw 0; return r.json(); })
-        .then(function(j){ if(!j.ok) throw 0; $("#pd-card").hidden=false; chips(j.accounts||[]); })
+      // after an OAuth completes is all it takes to arm the agent. Shared
+      // one-per-page-load cache (pdAccounts) — the avatar-card tool chips read
+      // the same snapshot, so the endpoint is hit once, not per view.
+      pdAccounts()
+        .then(function(s){ if(!s.ok) throw 0; $("#pd-card").hidden=false; chips(s.accounts||[]); })
         .catch(function(){ /* not configured — card stays hidden */ });
       function pdSearch(){
         var q=($("#pd-q").value||"").trim(); if(!q) return;

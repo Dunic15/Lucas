@@ -409,3 +409,17 @@ def test_derived_readiness_weights():
     owned = dict(unassigned, actions=[{"item": "x", "owner": "Ben"}])
     assert brain._derived_readiness(owned) == 100        # 25 + 25 + 30 + 20
 
+
+
+def test_laura_status_review_template_detected():
+    """Laura's PM specialization ships project_status_review (same template as
+    Petra); a status-flavoured line locks the meeting type via the curated
+    _TYPE_HINTS regex."""
+    from app import avatars
+
+    avatar = avatars.load("laura")
+    templates = meeting_state.templates_for(avatar)
+    assert "project_status_review" in [t.id for t in templates]
+
+    state = build_from_text(avatar, "Ana: Quick weekly status review on Apollo.")
+    assert state.meeting_type == "project_status_review"

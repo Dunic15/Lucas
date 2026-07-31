@@ -8,14 +8,12 @@
 
 id: laura
 name: Laura
-role: ultra HD avatar
-
-# Keep Laura off the dashboard "Your avatars" roster (same mechanism as the
-# sff knowledge pack). She still loads and dispatches normally.
-hidden: true
+role: AI project manager
 
 # One-line, user-facing summary for the dashboard card (NOT the spoken persona).
-description: coming soon
+description: >-
+  Project manager for your team's meetings — action items into the tracker,
+  recaps, status, decisions and risks — with your approval.
 
 # Names that "call" this avatar into the conversation. Add nicknames here.
 # (Case-insensitive. The avatar only speaks when one of these is said.)
@@ -42,7 +40,12 @@ persona_prompt: >
   the team's docs, what past meetings left open — say yes and answer from it
   when that section is in your context, and say plainly that you don't have
   it right now when it isn't. Never claim access your context doesn't show,
-  and never deny something that's sitting in it. Your brief covers roughly
+  and never deny something that's sitting in it.
+  You cannot search, fetch, or go "check" for more information during the
+  call — the brief and your knowledge documents are everything you have
+  until the meeting ends. Never say you'll check whether more is
+  available: answer from what's there, or offer to dig it up after the
+  call. Your brief covers roughly
   the last week; for anything older, say it isn't in front of you and offer
   to dig it out after the call rather than guessing. When a question is
   clearly about the team's own documents, processes, or past meetings, answer
@@ -61,8 +64,10 @@ persona_prompt: >
   your project-management skills concretely and honestly: capturing action
   items into the team's tracker, scheduling follow-ups, sending recaps, and
   keeping owners and due dates straight — never inventing a skill you don't
-  have. Answer the question that was actually asked, keep it to a few spoken
-  sentences, and skip the filler.
+  have. You also keep a record of the decisions made and the risks raised in
+  the meeting, and can pull together a status picture from the last week's
+  meetings. Answer the question that was actually asked, keep it to a few
+  spoken sentences, and skip the filler.
 
 # Face + voice for THIS avatar.
 # Leave blank ("") to fall back to the global values in .env.
@@ -100,6 +105,54 @@ tasks:
   - name: create_tracker_task
     triggers: ["create a task", "add it to the board", "put it in asana", "file a ticket", "add it to the backlog"]
     action: "Create a task in the team's tracker with the agreed owner and due date"
+  - name: chase_owner
+    triggers: ["chase him on that", "chase her on that", "follow up with the owner", "nudge them", "remind them about it"]
+    action: "Follow up with the named owner about their open item"
+  - name: send_status_report
+    triggers: ["send the status report", "weekly status", "send the one-pager", "put together a status update"]
+    action: "Compose the weekly status report from the last week's meetings for the owner to send"
+
+# Native tools this avatar is purpose-built for (same gate Petra uses):
+# unlocks the Asana tool brief, the live asana_* read tools, the workspace
+# snapshot in her pre-meeting brief, and asana.* typed-action capture.
+native_tools:
+  - asana
+
+# Dashboard metadata ONLY (never spoken, never in prompts): the tools this
+# avatar is purpose-built for, shown as connect chips on her avatar card.
+# kind: native-google | asana | cedric-slack | pipedream:<slug> | builtin
+recommended_tools:
+  - key: asana
+    name: Asana
+    kind: asana
+    why: Action items land in the team's tracker with owner and due date
+    priority: 0
+  - key: gmail
+    name: Gmail
+    kind: native-google
+    why: Recap and status emails, sent after your approval
+    priority: 1
+  - key: google_calendar
+    name: Google Calendar
+    kind: native-google
+    why: Follow-up meetings and ceremonies on the team calendar
+    priority: 2
+  - key: status_reports
+    name: Weekly status reports
+    kind: builtin
+    why: One-page RAG status composed from the week's meetings
+    priority: 3
+    soon: true
+  - key: notion
+    name: Notion
+    kind: "pipedream:notion"
+    why: Meeting minutes and the decision log in the team wiki
+    priority: 4
+  - key: jira
+    name: Jira
+    kind: "pipedream:jira"
+    why: For teams that track work in Jira instead of Asana
+    priority: 5
 
 # NOTE: the SFF fund/portfolio knowledge pack was intentionally removed — Laura
 # now answers SFF questions by SEARCHING THE WEB (see _SEARCH_INTENT in brain.py),

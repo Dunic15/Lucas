@@ -45,7 +45,11 @@ persona_prompt: >
   section is there, yes — answer from it directly; if it isn't, say you
   don't have the Drive docs loaded right now. Never claim access your
   context doesn't show, and never deny something that's sitting in it.
-  Stay grounded in that brief and your knowledge documents, and say
+  You cannot search, fetch, or go "check" for more information during the
+  call — the brief and your knowledge documents are everything you have
+  until the meeting ends. Never say you'll check whether more is
+  available: answer from what's there, or offer to dig it up after the
+  call. Stay grounded in that brief and your knowledge documents, and say
   plainly when something isn't in them. When someone
   asks you to DO something — schedule, send, create, check, remind —
   capture it with queue_action and confirm out loud that you'll take care
@@ -57,6 +61,65 @@ persona_prompt: >
   assistant skills concretely and honestly, never inventing one you don't
   have. Answer the question that was actually asked, keep it to a few spoken
   sentences, and skip the filler.
+
+# Deterministic task hints (PA-flavoured): bias the post-meeting action
+# capture toward the asks a personal assistant recognizes. They never
+# fabricate — an item is captured only when the transcript contains the ask.
+# create_reminder / add_waiting_on capture as generic actions until those
+# tools exist natively; the owner runs them from the dashboard card.
+tasks:
+  - name: schedule_meeting
+    triggers: ["schedule a meeting", "set up a call", "book a meeting", "put time on the calendar"]
+    action: "Create a calendar event with the agreed attendees and time"
+  - name: reschedule_meeting
+    triggers: ["reschedule", "move the meeting", "push it to", "shift the call"]
+    action: "Move the named meeting to the agreed new time"
+  - name: send_email
+    triggers: ["send an email", "email him", "email her", "shoot them a message", "send a follow-up email"]
+    action: "Draft and send the agreed email — draft-first when the recipient is outside the team"
+  - name: create_reminder
+    triggers: ["remind me", "set a reminder", "don't let me forget"]
+    action: "Set a reminder for the owner about the agreed item"
+  - name: add_waiting_on
+    triggers: ["we're waiting on", "add to the waiting list", "track that we're blocked on"]
+    action: "Track the item the owner is waiting on, with who owes it"
+
+# Dashboard metadata ONLY (never spoken, never in prompts): the tools this
+# avatar is purpose-built for, shown as connect chips on his avatar card.
+# kind: native-google | asana | cedric-slack | pipedream:<slug> | builtin
+recommended_tools:
+  - key: google_calendar
+    name: Google Calendar
+    kind: native-google
+    why: Scheduling, reschedules and conflict checks on the owner's calendar
+    priority: 0
+  - key: gmail
+    name: Gmail
+    kind: native-google
+    why: Follow-up email on the owner's behalf, draft-first for external
+    priority: 1
+  - key: contacts
+    name: Google Contacts
+    kind: builtin
+    why: Who's-who lookup so "email Duccio" resolves to an address
+    priority: 2
+    soon: true
+  - key: reminders
+    name: Reminders
+    kind: builtin
+    why: Don't-let-me-forget items and a waiting-on list
+    priority: 3
+    soon: true
+  - key: calendly
+    name: Calendly
+    kind: "pipedream:calendly"
+    why: External booking links without the back-and-forth
+    priority: 4
+  - key: expensify
+    name: Expensify
+    kind: "pipedream:expensify"
+    why: Receipts and expense reports off the owner's plate
+    priority: 5
 
 # Reuse the shared SFF knowledge pack (fund overview, portfolio,
 # mentor/bootcamp notes) without copying the files.

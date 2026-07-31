@@ -135,6 +135,11 @@ _TYPE_HINTS: dict[str, re.Pattern] = {
         r"\bagenda for\b|\bpre[- ]?read\b|\bprep\w* for (the|our|next|this|tomorrow)\b",
         re.IGNORECASE,
     ),
+    "project_status_review": re.compile(
+        r"\bstatus (update|review|report)\b|\bweekly status\b|\bsprint review\b|"
+        r"\bwalk the board\b|\bproject status\b|\bhow (are we|is it) tracking\b",
+        re.IGNORECASE,
+    ),
 }
 
 

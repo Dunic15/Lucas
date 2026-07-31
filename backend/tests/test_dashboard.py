@@ -65,10 +65,11 @@ def test_summary_shape_and_attribution(client):
 
     assert {"avatars", "live", "meetings", "stats", "connections"} <= set(data)
 
-    # Installed avatars come from the registry; hidden ones (laura, sff) don't
-    # surface as dashboard cards.
+    # Installed avatars come from the registry; hidden ones (the sff knowledge
+    # pack) don't surface as dashboard cards. Laura is a visible avatar since
+    # her PM specialization (2026-07-31).
     ids = {a["id"] for a in data["avatars"]}
-    assert "cedric" in ids and "laura" not in ids
+    assert "cedric" in ids and "laura" in ids and "sff" not in ids
 
     m = data["meetings"][0]
     assert m["avatar_id"] == "cedric"
@@ -152,14 +153,14 @@ def test_summary_respects_bearer_gate(client, monkeypatch):
 
 
 def test_hidden_avatar_excluded_and_enriched(client):
-    """Avatars flagged hidden: true (sff the knowledge pack, laura by owner
-    choice) must NOT appear in the dashboard list; Cedric must, with
+    """Avatars flagged hidden: true (the sff knowledge pack) must NOT appear
+    in the dashboard list; callable avatars (Cedric, Laura) must, with
     capabilities."""
     _seed_artifact()
     data = client.get("/dashboard/summary").json()
     ids = {a["id"] for a in data["avatars"]}
     assert "sff" not in ids
-    assert "laura" not in ids
+    assert "laura" in ids
     assert "cedric" in ids
 
     cedric = next(a for a in data["avatars"] if a["id"] == "cedric")
@@ -170,17 +171,20 @@ def test_hidden_avatar_excluded_and_enriched(client):
 
 def test_avatar_email_default_bare_others_tagged(client):
     """The watched inbox IS the default avatar's address (bare); every other
-    avatar is a +tag alias of it. The default avatar (laura) is hidden from the
-    dashboard, so every visible card shows its +tag alias — the bare address
-    still summons the default avatar via the untagged-invite fallback."""
+    avatar is a +tag alias of it. The default avatar (laura) is visible since
+    her PM specialization, so her card shows the bare address while every
+    other card shows its +tag alias."""
     data = client.get("/dashboard/summary").json()
     by_id = {a["id"]: a for a in data["avatars"]}
     raw = settings.calendar_invite_emails.split(",")[0].strip()
     local, _, domain = raw.partition("@")
     base = local.split("+")[0]
-    assert settings.default_avatar_id not in by_id  # hidden from the dashboard
+    assert settings.default_avatar_id in by_id
     for aid, card in by_id.items():
-        assert card["email"] == f"{base}+{aid}@{domain}"
+        if aid == settings.default_avatar_id:
+            assert card["email"] == f"{base}@{domain}"
+        else:
+            assert card["email"] == f"{base}+{aid}@{domain}"
 
 
 def test_billing_block_real_minutes(client):

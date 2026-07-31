@@ -142,12 +142,13 @@ def test_tool_specs_expose_the_new_tools():
     assert "list_capabilities" in names and "search_tools" in names
 
 
-# ── Asana is Petra-only (avatar-gated native tool) ──────────────────────────
+# ── Asana is declaration-gated (avatar-gated native tool) ───────────────────
 
-def test_asana_tool_is_petra_only(fresh_store, monkeypatch):
-    """Asana appears in the tool brief ONLY for the avatar built for it (Petra
-    declares native_tools:[asana]); every other avatar's brief omits it even
-    when the org has connected Asana. Google Calendar stays baseline for all."""
+def test_asana_tool_gated_on_declaration(fresh_store, monkeypatch):
+    """Asana appears in the tool brief ONLY for avatars built for it (Petra
+    and — since her PM specialization — Laura declare native_tools:[asana]);
+    every other avatar's brief omits it even when the org has connected Asana.
+    Google Calendar stays baseline for all."""
     from app import asana_client, avatars
 
     st = fresh_store
@@ -158,14 +159,17 @@ def test_asana_tool_is_petra_only(fresh_store, monkeypatch):
 
     petra = tool_registry.assemble("org-x", avatars.load("petra"))
     laura = tool_registry.assemble("org-x", avatars.load("laura"))
+    cedric = tool_registry.assemble("org-x", avatars.load("cedric"))
     petra_names = [t["name"] for t in petra["native"]]
     laura_names = [t["name"] for t in laura["native"]]
+    cedric_names = [t["name"] for t in cedric["native"]]
 
     assert "asana_tasks" in petra_names          # Petra owns Asana
-    assert "asana_tasks" not in laura_names       # Laura never sees it
-    # Google Calendar + Gmail are baseline for BOTH
+    assert "asana_tasks" in laura_names          # Laura the PM owns it too
+    assert "asana_tasks" not in cedric_names     # the PA never sees it
+    # Google Calendar + Gmail are baseline for ALL
     assert "google_calendar" in petra_names and "google_calendar" in laura_names
-    assert "gmail_send" in petra_names and "gmail_send" in laura_names
+    assert "gmail_send" in petra_names and "gmail_send" in cedric_names
 
 
 def test_asana_off_for_petra_when_org_not_connected(fresh_store, monkeypatch):
@@ -181,7 +185,8 @@ def test_asana_off_for_petra_when_org_not_connected(fresh_store, monkeypatch):
 
 def test_asana_toggle_override_still_works(fresh_store, monkeypatch):
     """An explicit per-avatar toggle overrides the declaration default both
-    ways: force Asana OFF for Petra, or ON for Laura."""
+    ways: force Asana OFF for Petra (a declaring avatar), or ON for Cedric
+    (a non-declaring one)."""
     from app import asana_client, avatars
 
     st = fresh_store
@@ -189,10 +194,10 @@ def test_asana_toggle_override_still_works(fresh_store, monkeypatch):
     monkeypatch.setattr(
         cedric_callback, "fetch_org_connectors", lambda org, team="": {"connectors": []}
     )
-    st.set_avatar_capability("petra", "asana", False)  # owner turns Petra's off
-    st.set_avatar_capability("laura", "asana", True)   # owner turns Laura's on
+    st.set_avatar_capability("petra", "asana", False)   # owner turns Petra's off
+    st.set_avatar_capability("cedric", "asana", True)   # owner turns Cedric's on
 
     petra = tool_registry.assemble("org-x", avatars.load("petra"))
-    laura = tool_registry.assemble("org-x", avatars.load("laura"))
+    cedric = tool_registry.assemble("org-x", avatars.load("cedric"))
     assert "asana_tasks" not in [t["name"] for t in petra["native"]]
-    assert "asana_tasks" in [t["name"] for t in laura["native"]]
+    assert "asana_tasks" in [t["name"] for t in cedric["native"]]
