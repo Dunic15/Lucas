@@ -874,6 +874,83 @@ def verify_gmail_message(org_id: str, message_id: str) -> bool:
         return False
 
 
+_PEOPLE_TTL = 180.0
+_people_cache: dict[str, tuple[float, list]] = {}
+
+
+def _event_meeting_key(item: dict) -> str:
+    """The stable meeting-series key for one raw calendar event: hangoutLink →
+    conference entryPoint → URL-shaped location, run through the same
+    ledger.meeting_key() that memory_meetings rows use — so calendar people
+    can be matched to the meeting being deposited."""
+    url = str(item.get("hangoutLink") or "").strip()
+    if not url:
+        conf = item.get("conferenceData") or {}
+        for ep in conf.get("entryPoints") or []:
+            if isinstance(ep, dict) and ep.get("entryPointType") == "video":
+                url = str(ep.get("uri") or "").strip()
+                break
+    if not url:
+        loc = str(item.get("location") or "").strip()
+        if loc.startswith("http://") or loc.startswith("https://"):
+            url = loc
+    if not url:
+        return ""
+    try:
+        from ..actions import ledger
+
+        return ledger.meeting_key(url)
+    except Exception:  # noqa: BLE001 — matching is best-effort
+        return ""
+
+
+def calendar_people(org_id: str) -> list[dict]:
+    """The org's calendar CONTACTS: [{email, name, meeting_key}] harvested
+    from upcoming events' attendees + organizers (skipping rooms/resources
+    and the org's own 'self' entry). Feeds the meeting-memory person graph
+    and the person_lookup tool — a deliberate, org-scoped exception to the
+    'briefs never carry addresses' rule (owner ask 2026-07-31: "is it not in
+    the database?"). TTL-cached like calendar_brief; [] on any failure."""
+    org = (org_id or "").strip()
+    if not org:
+        return []
+    now = time.time()
+    cached = _people_cache.get(org)
+    if cached and now - cached[0] < _PEOPLE_TTL:
+        return cached[1]
+    people: list[dict] = []
+    try:
+        res = list_calendar_events(org, max_results=20)
+        if res.get("ok"):
+            seen: set[tuple[str, str]] = set()
+            for item in res.get("events") or []:
+                if not isinstance(item, dict):
+                    continue
+                mkey = _event_meeting_key(item)
+                entries = list(item.get("attendees") or [])
+                organizer = item.get("organizer")
+                if isinstance(organizer, dict):
+                    entries.append(organizer)
+                for a in entries:
+                    if not isinstance(a, dict) or a.get("resource") or a.get("self"):
+                        continue
+                    email = str(a.get("email") or "").strip().lower()
+                    if not email or "@" not in email:
+                        continue
+                    name = str(a.get("displayName") or "").strip()
+                    dedupe = (email, mkey)
+                    if dedupe in seen:
+                        continue
+                    seen.add(dedupe)
+                    people.append(
+                        {"email": email, "name": name, "meeting_key": mkey}
+                    )
+    except Exception:  # noqa: BLE001 — the join never fails on people harvest
+        people = []
+    _people_cache[org] = (now, people)
+    return people
+
+
 def calendar_brief(org_id: str) -> str:
     """Markdown brief of the org's upcoming primary calendar; "" when the org
     has no Google connected or on any failure — the join proceeds without it."""

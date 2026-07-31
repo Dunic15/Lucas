@@ -1717,6 +1717,21 @@ def get_user(user_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def list_org_members(org_id: str) -> list[dict]:
+    """The org's known people (email + name) — feeds person_lookup only
+    (meeting-memory, org-scoped; never rides a brief or a log)."""
+    org = (org_id or "").strip()
+    if not org:
+        return []
+    with _LOCK, _connect() as conn:
+        rows = conn.execute(
+            "SELECT email, name FROM users WHERE org_id = ? ORDER BY email "
+            "LIMIT 200",
+            (org,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def resolve_org_token(raw_token: str) -> str | None:
     """org_id owning this raw machine bearer, or None. Same contract as
     control_plane.resolve_org_token (sha256(raw) looked up in org_tokens) —

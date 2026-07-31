@@ -579,7 +579,7 @@ async def _start_avatar_session(
         return jira_client.workspace_brief(org_id) or ""
 
     (carryover, folder, asana_snapshot, reg, cal_brief, asana_live,
-     jira_snapshot, inbox_snapshot, week) = await asyncio.gather(
+     jira_snapshot, inbox_snapshot, week, cal_people) = await asyncio.gather(
         _quiet(run_in_threadpool(ledger.carryover_brief, meeting_url, org_id=org_id)),
         _quiet(
             run_in_threadpool(drive_client.folder_brief, avatar.drive_folder_id, org_id)
@@ -606,6 +606,10 @@ async def _start_avatar_session(
                 timeout=settings.meeting_memory_brief_timeout_seconds,
             )
         ),
+        # cal_people — org calendar contacts ({email, name, meeting_key}) for
+        # the meeting-memory person graph + person_lookup. Cached alongside
+        # calendar_brief; never rides the prompt itself.
+        _quiet(run_in_threadpool(google_client.calendar_people, org_id)),
     )
     session.asana_live = bool(asana_live)
     # Distinct from asana_live (live READ TOOLS = native token + enablement):
@@ -692,9 +696,27 @@ async def _start_avatar_session(
         session.week_digest = week
         session.memory_brief = (
             "[Last 7 days — what the company discussed and decided, "
-            f"distilled from past meetings with dates]\n{week}\n\n"
+            "distilled from past meetings with dates — this IS your memory "
+            "of the last week; cite it with dates when asked what you "
+            f"remember]\n{week}\n\n"
             + (session.memory_brief or "")
         )
+    # Calendar contacts + the starting user: the identity sources the
+    # meeting-memory person graph enriches from at deposit time.
+    session.calendar_people = list(cal_people or [])
+    if principal_id:
+        try:
+            starter = await run_in_threadpool(store.get_user, principal_id)
+            if starter and starter.get("email"):
+                session.calendar_people.append(
+                    {
+                        "email": str(starter["email"]).lower(),
+                        "name": str(starter.get("name") or ""),
+                        "meeting_key": "",
+                    }
+                )
+        except Exception:  # noqa: BLE001 — identity harvest is best-effort
+            pass
     if settings.autopilot_brief and session.memory_brief:
         # Autopilot: mail/Slack "what's still open from last time" to the
         # owner as the bot joins. Fire-and-forget — never delays the join.

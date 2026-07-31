@@ -87,14 +87,57 @@ def _distill_actions(actions: Any) -> list[dict[str, str]]:
     return out
 
 
-def _attendees_of(session: Any, artifact: dict) -> list[dict[str, Any]]:
+def _calendar_email_maps(
+    session: Any, meeting_key: str
+) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """(this-meeting, org-wide) normalized-name → {emails} maps from the
+    session's harvested calendar contacts (calendar events, invite payloads,
+    the dashboard user who started the session)."""
+    scoped: dict[str, set[str]] = {}
+    org_wide: dict[str, set[str]] = {}
+    for p in getattr(session, "calendar_people", None) or []:
+        if not isinstance(p, dict):
+            continue
+        email = str(p.get("email") or "").strip().lower()
+        name = _norm_dn(str(p.get("name") or ""))
+        if not email or "@" not in email or not name:
+            continue
+        mk = str(p.get("meeting_key") or "")
+        target = scoped if (mk and mk == meeting_key) else org_wide
+        target.setdefault(name, set()).add(email)
+    return scoped, org_wide
+
+
+def _attendees_of(
+    session: Any, artifact: dict, meeting_key: str = ""
+) -> list[dict[str, Any]]:
     """Merge the live roster (display names, no emails — Recall sends none)
-    with the artifact's participation lines (who actually spoke)."""
+    with the artifact's participation lines (who actually spoke), then
+    resolve emails from the session's calendar contacts: this meeting's
+    invitees first, the org's wider calendar second — and only on an
+    UNAMBIGUOUS exact-normalized-name match (two candidate emails ⇒ none)."""
     spoke = {
         _norm_dn(str(p.get("name") or ""))
         for p in (artifact.get("participation") or [])
         if isinstance(p, dict)
     }
+    scoped, org_wide = _calendar_email_maps(session, meeting_key)
+
+    def _resolve_email(key: str) -> tuple[str, str]:
+        # Scoped (this meeting's invite) is authoritative when it KNOWS the
+        # name at all: a scoped-ambiguous name must NOT fall through to an
+        # org-wide "unique" hit — that unique hit is one of the ambiguous
+        # candidates and we can't know which.
+        scoped_emails = scoped.get(key)
+        if scoped_emails is not None:
+            if len(scoped_emails) == 1:
+                return next(iter(scoped_emails)), "directory"
+            return "", "display_name"
+        org_emails = org_wide.get(key) or set()
+        if len(org_emails) == 1:
+            return next(iter(org_emails)), "directory"
+        return "", "display_name"
+
     seen: dict[str, dict[str, Any]] = {}
     for identity in (getattr(session, "participants", None) or {}).values():
         if str(identity.get("kind") or "human") != "human":
@@ -104,10 +147,13 @@ def _attendees_of(session: Any, artifact: dict) -> list[dict[str, Any]]:
         if not key or key in seen:
             continue
         email = str(identity.get("email") or "").strip().lower()
+        resolution = "email" if email else "display_name"
+        if not email:
+            email, resolution = _resolve_email(key)
         seen[key] = {
             "display": name[:120],
             "email": email,
-            "resolution": "email" if email else "display_name",
+            "resolution": resolution,
             "spoke": key in spoke,
         }
     # Speakers known only from the transcript labels (roster gap) still count.
@@ -162,7 +208,7 @@ def deposit(session: Any, artifact: dict) -> bool:
                 [_clip(s) for s in (artifact.get("missing_steps") or []) if str(s).strip()]
             ),
         }
-        attendees = _attendees_of(session, artifact)
+        attendees = _attendees_of(session, artifact, row["meeting_key"])
         # Chunks + embeddings are computed BEFORE the transaction opens — an
         # embedding provider call must never run while holding a connection.
         chunks = _build_chunks(row)
@@ -203,6 +249,10 @@ def deposit(session: Any, artifact: dict) -> bool:
                     conn, org_id, "person", key,
                     display=att["display"], email=att["email"],
                 )
+                if att["email"]:
+                    # Spec §6 merge, one direction: a prior display-name node
+                    # for the same person folds into the email-verified node.
+                    _merge_dn_alias(conn, org_id, entity_id, att["display"])
                 person_ids[_norm_dn(att["display"])] = entity_id
                 conn.execute(
                     text(
@@ -215,7 +265,8 @@ def deposit(session: Any, artifact: dict) -> bool:
                           :display, :email, :resolution, :spoke
                         )
                         ON CONFLICT (org_id, meeting_id, entity_id)
-                        DO UPDATE SET spoke = EXCLUDED.spoke
+                        DO UPDATE SET
+                          spoke = memory_attendees.spoke OR EXCLUDED.spoke
                         """
                     ),
                     {
@@ -233,6 +284,119 @@ def deposit(session: Any, artifact: dict) -> bool:
         return True
     except Exception:
         return False
+
+
+def _merge_dn_alias(conn, org_id: str, email_entity_id: str, display: str) -> None:
+    """Fold a display-name-keyed person node into its email-verified twin
+    (spec §6): rewrite attendees/edges/grants to the canonical node, mark the
+    dn node alias_of, fold its mention_count. One direction only, exact
+    normalized-name match only, never across two different emails (an
+    email-keyed node can never be an alias source here — dn: keys only)."""
+    dn_key = "dn:" + _norm_dn(display)
+    old_id = conn.execute(
+        text(
+            """
+            SELECT id FROM memory_entities
+            WHERE org_id = CAST(:org_id AS uuid) AND kind = 'person'
+              AND key = :dn AND alias_of IS NULL AND id <> :canon
+            """
+        ),
+        {"org_id": org_id, "dn": dn_key, "canon": email_entity_id},
+    ).scalar()
+    if not old_id:
+        return
+    moved = 0
+    moved += conn.execute(
+        text(
+            """
+            INSERT INTO memory_attendees (
+              org_id, meeting_id, entity_id, display, email, resolution, spoke
+            )
+            SELECT org_id, meeting_id, CAST(:canon AS uuid), display, email,
+                   resolution, spoke
+            FROM memory_attendees
+            WHERE org_id = CAST(:org_id AS uuid) AND entity_id = :old
+            ON CONFLICT (org_id, meeting_id, entity_id) DO NOTHING
+            """
+        ),
+        {"org_id": org_id, "canon": email_entity_id, "old": old_id},
+    ).rowcount or 0
+    conn.execute(
+        text(
+            "DELETE FROM memory_attendees "
+            "WHERE org_id = CAST(:org_id AS uuid) AND entity_id = :old"
+        ),
+        {"org_id": org_id, "old": old_id},
+    )
+    # Edge rewrite (src side then dst side), idempotent via the edges PK.
+    for col in ("src_id", "dst_id"):
+        other = "dst_id" if col == "src_id" else "src_id"
+        conn.execute(
+            text(
+                f"""
+                INSERT INTO memory_edges (
+                  org_id, {col}, {other}, rel, meeting_id, confidence
+                )
+                SELECT org_id, CAST(:canon AS uuid), {other}, rel,
+                       meeting_id, confidence
+                FROM memory_edges
+                WHERE org_id = CAST(:org_id AS uuid) AND {col} = :old
+                ON CONFLICT (org_id, src_id, rel, dst_id, meeting_id)
+                DO NOTHING
+                """
+            ),
+            {"org_id": org_id, "canon": email_entity_id, "old": old_id},
+        )
+        conn.execute(
+            text(
+                f"DELETE FROM memory_edges "
+                f"WHERE org_id = CAST(:org_id AS uuid) AND {col} = :old"
+            ),
+            {"org_id": org_id, "old": old_id},
+        )
+    conn.execute(
+        text(
+            """
+            INSERT INTO memory_grants (org_id, meeting_id, entity_id, granted_by)
+            SELECT org_id, meeting_id, CAST(:canon AS uuid), granted_by
+            FROM memory_grants
+            WHERE org_id = CAST(:org_id AS uuid) AND entity_id = :old
+            ON CONFLICT (org_id, meeting_id, entity_id) DO NOTHING
+            """
+        ),
+        {"org_id": org_id, "canon": email_entity_id, "old": old_id},
+    )
+    conn.execute(
+        text(
+            "DELETE FROM memory_grants "
+            "WHERE org_id = CAST(:org_id AS uuid) AND entity_id = :old"
+        ),
+        {"org_id": org_id, "old": old_id},
+    )
+    conn.execute(
+        text(
+            """
+            UPDATE memory_entities canon SET
+              mention_count = canon.mention_count + old.mention_count,
+              first_seen_at = LEAST(canon.first_seen_at, old.first_seen_at)
+            FROM memory_entities old
+            WHERE canon.org_id = CAST(:org_id AS uuid) AND canon.id = :canon
+              AND old.org_id = canon.org_id AND old.id = :old
+            """
+        ),
+        {"org_id": org_id, "canon": email_entity_id, "old": old_id},
+    )
+    conn.execute(
+        text(
+            """
+            UPDATE memory_entities SET alias_of = :canon, mention_count = 0
+            WHERE org_id = CAST(:org_id AS uuid) AND id = :old
+            """
+        ),
+        {"org_id": org_id, "canon": email_entity_id, "old": old_id},
+    )
+    # PII-safe: counts only.
+    print(f"[memory] entity merged rows={moved}", flush=True)
 
 
 # ── the graph half (Slice 2) — deterministic, no model in the identity path ─
@@ -256,6 +420,9 @@ def _upsert_entity(
               display = CASE WHEN EXCLUDED.display <> ''
                              THEN EXCLUDED.display
                              ELSE memory_entities.display END,
+              email = CASE WHEN EXCLUDED.email <> ''
+                           THEN EXCLUDED.email
+                           ELSE memory_entities.email END,
               last_seen_at = clock_timestamp(),
               mention_count = memory_entities.mention_count + 1
             RETURNING id
@@ -1193,3 +1360,105 @@ def org_summary(org_id: str) -> dict:
         "entities": counts,
         "recent": recent,
     }
+
+
+# ── person lookup (owner ask 2026-07-31: "is it not in the database?") ──────
+#
+# A deliberate, bounded exception to the "briefs never carry addresses" rule:
+# org-scoped sources only (this org's memory entities, org members, the
+# session's harvested calendar contacts), gated by MEETING_MEMORY_ENABLED,
+# spoken only when someone in the room asks for a person.
+
+def lookup_person(query: str, session: Any) -> str:
+    """Who is X / how do I reach X — from accumulated memory + org directory.
+    Returns a short model-facing string; never raises."""
+    try:
+        if not enabled():
+            return "meeting memory is not enabled for this deployment"
+        org_id = str(getattr(session, "org_id", "") or "")
+        if not control_plane.is_durable_org(org_id):
+            return "person lookup is not available for this org"
+        q = _norm_dn(str(query or ""))
+        if not q:
+            return "error: empty query"
+        needle = f"%{q}%"
+
+        matches: dict[str, dict[str, Any]] = {}
+
+        def _add(name: str, email: str, extra: str = "") -> None:
+            mkey = (email or "").lower() or ("dn:" + _norm_dn(name))
+            cur = matches.setdefault(
+                mkey, {"name": name or "", "email": (email or "").lower(),
+                       "extra": extra}
+            )
+            if name and not cur["name"]:
+                cur["name"] = name
+            if email and not cur["email"]:
+                cur["email"] = email.lower()
+            if extra and not cur["extra"]:
+                cur["extra"] = extra
+
+        with _engine().begin() as conn:
+            _set_org(conn, org_id)
+            conn.execute(text("SET LOCAL statement_timeout = 1500"))
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT e.display, e.email,
+                           (SELECT count(*) FROM memory_attendees a
+                            WHERE a.org_id = e.org_id
+                              AND a.entity_id = e.id) AS met,
+                           to_char(e.last_seen_at, 'YYYY-MM-DD') AS last_seen
+                    FROM memory_entities e
+                    WHERE e.org_id = CAST(:org_id AS uuid)
+                      AND e.kind = 'person' AND e.alias_of IS NULL
+                      AND (lower(e.display) LIKE :needle
+                           OR lower(e.key) LIKE :needle
+                           OR lower(e.email) LIKE :needle)
+                    ORDER BY e.last_seen_at DESC LIMIT 5
+                    """
+                ),
+                {"org_id": org_id, "needle": needle},
+            ).mappings().all()
+        for r in rows:
+            extra = ""
+            if int(r["met"] or 0) > 0:
+                extra = (
+                    f"in {r['met']} remembered meeting"
+                    f"{'s' if int(r['met']) != 1 else ''}, "
+                    f"last {r['last_seen']}"
+                )
+            _add(str(r["display"]), str(r["email"]), extra)
+
+        try:
+            from .. import store
+
+            for m in store.list_org_members(org_id):
+                name = str(m.get("name") or "")
+                if q in _norm_dn(name) or q in str(m.get("email") or "").lower():
+                    _add(name, str(m.get("email") or ""), "org member")
+        except Exception:
+            pass
+        for p in getattr(session, "calendar_people", None) or []:
+            if not isinstance(p, dict):
+                continue
+            name = str(p.get("name") or "")
+            email = str(p.get("email") or "")
+            if q in _norm_dn(name) or q in email.lower():
+                _add(name, email, "on the calendar")
+
+        if not matches:
+            return (
+                f"no one matching '{str(query or '').strip()[:60]}' in this "
+                "org's memory, member directory, or calendar contacts"
+            )
+        lines = []
+        for m in list(matches.values())[:3]:
+            line = m["name"] or m["email"]
+            line += f" — {m['email']}" if m["email"] else " — no email on record"
+            if m["extra"]:
+                line += f" ({m['extra']})"
+            lines.append("- " + line)
+        return "People matching (org-scoped):\n" + "\n".join(lines)
+    except Exception as e:  # noqa: BLE001 — a tool must answer, not raise
+        return f"error: person lookup failed ({type(e).__name__})"

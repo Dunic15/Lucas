@@ -205,6 +205,28 @@ upsert, they cannot create a second node for the same key.
 | decision | `sha1(_norm(text))` per org | Reuses `ledger._norm` — the dedupe function already in production. |
 | action | `action_id` | Already stable across live capture → webhook → artifact → ledger. |
 
+> **As built (2026-07-31, post live-test):** attendee emails ARE harvested —
+> from upcoming calendar events' `attendees[].email`+`displayName`
+> (`google_client.calendar_people`, TTL-cached), the calendar-invite payload
+> on auto-join, and the dashboard user who started the session. `deposit()`
+> attaches an email to an attendee only on an UNAMBIGUOUS exact-normalized-
+> name match (this meeting's invitees first, org-wide second); the merge rule
+> below is implemented (`_merge_dn_alias`). A `person_lookup` live tool
+> answers "who is X / what's X's email" from memory entities + org members +
+> calendar contacts — a deliberate, org-scoped exception to the "briefs
+> never carry addresses" rule, made at the owner's explicit request in the
+> 2026-07-31 live test.
+>
+> **Accepted risk (owner-visible, red-team 2026-07-31):** deposit-time email
+> attach matches on the CLIENT-CONTROLLED display name. A guest who renames
+> their Zoom client to an invitee's exact name gets that invitee's email
+> attached to their own attendance row (misattributed presence in
+> person_lookup/"met in N meetings"; the retrieval ACL is separately
+> protected by the strict identity default in §7's addendum). The real fix
+> is platform-authenticated join identity, which Recall does not provide
+> today. Mitigations in place: this-meeting invitees take precedence,
+> ambiguous names attach nothing, merges never cross two emails.
+
 **Merge rule (one direction, never automatic across emails).** When a
 display-name node later co-occurs with a confirmed email for the same person
 (calendar invite for the same `meeting_key`, or a directory match), the

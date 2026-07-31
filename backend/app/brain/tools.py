@@ -1206,8 +1206,10 @@ MEETING_MEMORY_TOOL_SPEC = {
             "Search the company's accumulated memory of PAST meetings "
             "(older than this week's brief): decisions, actions, who "
             "attended, when. Use when someone asks 'didn't we decide…', "
-            "'when did we discuss…', or about an older meeting. Results "
-            "only include meetings the current room may see."
+            "'when did we discuss…', about an older meeting — or asks what "
+            "you remember, what happened in past meetings, or who attended "
+            "a previous meeting. Results only include meetings the current "
+            "room may see."
         ),
         "parameters": {
             "type": "object",
@@ -1215,6 +1217,41 @@ MEETING_MEMORY_TOOL_SPEC = {
                 "query": {
                     "type": "string",
                     "description": "What to recall (topic, decision, person).",
+                }
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+
+def person_lookup(query: str = "", session=None) -> str:
+    """Who is X / what's X's email — org-scoped, from accumulated meeting
+    memory + the org directory + calendar contacts. Gate re-checked at
+    dispatch time."""
+    from ..memory import meeting_memory
+
+    if not meeting_memory.enabled():
+        return "meeting memory is not enabled for this deployment"
+    return meeting_memory.lookup_person(query, session)
+
+
+PERSON_LOOKUP_TOOL_SPEC = {
+    "type": "function",
+    "function": {
+        "name": "person_lookup",
+        "description": (
+            "Look up a person this org knows: their email address, whether "
+            "they're an org member, and which remembered meetings they were "
+            "in. Use when someone asks who a person is, for their email or "
+            "contact, or how to reach them. Org-scoped only."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The person's name (or part of an email).",
                 }
             },
             "required": ["query"],
@@ -1235,6 +1272,7 @@ _DISPATCH = {
     "asana_tasks": asana_tasks,
     "asana_search": asana_search,
     "meeting_memory_search": meeting_memory_search,
+    "person_lookup": person_lookup,
 }
 
 # Tools that receive the live session (to capture onto it). Everything else
@@ -1242,6 +1280,7 @@ _DISPATCH = {
 _SESSION_TOOLS = {
     "queue_action", "list_capabilities", "search_tools", "upcoming_meetings",
     "asana_projects", "asana_tasks", "asana_search", "meeting_memory_search",
+    "person_lookup",
 }
 
 
@@ -1270,6 +1309,7 @@ def specs_for(session, *, live: bool = True) -> list[dict]:
             str(getattr(session, "org_id", "") or "") if session else ""
         ):
             specs.append(MEETING_MEMORY_TOOL_SPEC)
+            specs.append(PERSON_LOOKUP_TOOL_SPEC)
     reg = getattr(session, "tool_registry", None) if session else None
     mcp_tools = reg.get("cedric_mcp") if isinstance(reg, dict) else None
     if mcp_tools:

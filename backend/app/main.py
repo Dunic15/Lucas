@@ -3131,6 +3131,48 @@ async def recall_calendar_webhook(request: Request) -> JSONResponse:
                 bot_id=bot["id"], meeting_url=url, avatar_id=avatar.id,
                 org_id=dispatch_org,
             )
+            # Invite emails die with this webhook otherwise — stash them on
+            # the session so meeting-memory's deposit can attach verified
+            # emails to person entities (org-scoped; never logged, never in
+            # a brief). Names matter: deposit matches attendees BY NAME, so
+            # walk the payload for attendee dicts carrying displayName; bare
+            # emails (name="") still serve person_lookup's email search.
+            try:
+                _mk = ledger.meeting_key(url) if url else ""
+                _people: list[dict] = []
+                _seen_emails: set[str] = set()
+                for _container in (ev, ev.get("raw") or {}):
+                    if not isinstance(_container, dict):
+                        continue
+                    for _a in _container.get("attendees") or []:
+                        if not isinstance(_a, dict) or _a.get("resource"):
+                            continue
+                        _e = str(_a.get("email") or "").strip().lower()
+                        if not _e or "@" not in _e or _e in _seen_emails:
+                            continue
+                        _seen_emails.add(_e)
+                        _people.append(
+                            {
+                                "email": _e,
+                                "name": str(_a.get("displayName") or "").strip(),
+                                "meeting_key": _mk,
+                            }
+                        )
+                for _e in sorted(_extract_invite_emails(ev)):
+                    if _e.lower() not in _seen_emails:
+                        _seen_emails.add(_e.lower())
+                        _people.append(
+                            {"email": _e.lower(), "name": "",
+                             "meeting_key": _mk}
+                        )
+                _org_email = _calendar_event_organizer_email(ev).lower()
+                if _org_email and _org_email not in _seen_emails:
+                    _people.append(
+                        {"email": _org_email, "name": "", "meeting_key": _mk}
+                    )
+                s.calendar_people = _people
+            except Exception:  # noqa: BLE001 — identity harvest is best-effort
+                pass
             # M2 overlay stash (behavioral personalization for the live path).
             # The page URL above was built BEFORE org attribution, so autojoin
             # keeps the canonical face/body — a documented limitation; name,
@@ -3942,7 +3984,9 @@ async def recall_webhook(request: Request) -> JSONResponse:
             session.week_digest = week
             rebuilt = (
                 "[Last 7 days — what the company discussed and decided, "
-                f"distilled from past meetings with dates]\n{week}\n\n"
+                "distilled from past meetings with dates — this IS your "
+                "memory of the last week; cite it with dates when asked "
+                f"what you remember]\n{week}\n\n"
                 + (rebuilt or "")
             )
         session.memory_brief = rebuilt
