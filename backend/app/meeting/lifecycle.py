@@ -597,12 +597,14 @@ async def _start_avatar_session(
         # beyond the slowest gather leg.
         _quiet(run_in_threadpool(google_client.gmail_inbox_brief, org_id)),
         # week — the accumulated past-7-days memory digest (Meeting Memory
-        # Slice 1). Usually a single-row cache read; a regeneration is one
-        # fast-model call bounded by the timeout so a slow model can never
-        # delay bot dispatch (the whole entry stays best-effort via _quiet).
+        # Slice 1). ORG scope (owner 2026-07-31: ONE shared brain — Laura
+        # knows Cedric's meetings and vice versa), so it's one cached digest
+        # per org, not per avatar. Usually a single-row cache read; a
+        # regeneration is one fast-model call bounded by the timeout so a
+        # slow model can never delay bot dispatch (best-effort via _quiet).
         _quiet(
             asyncio.wait_for(
-                run_in_threadpool(meeting_memory.week_brief, org_id, avatar.id),
+                run_in_threadpool(meeting_memory.week_brief, org_id, ""),
                 timeout=settings.meeting_memory_brief_timeout_seconds,
             )
         ),

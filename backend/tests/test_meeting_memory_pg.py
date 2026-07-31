@@ -213,6 +213,31 @@ def test_two_links_accumulate_and_digest_is_cached(mm, pg):
     assert "Budget sync" in mm.week_brief(org, "laura")
 
 
+def test_org_scope_shares_brain_across_avatars(mm, pg):
+    """Owner 2026-07-31: ONE shared brain — an org-scope brief (avatar_id="")
+    carries every avatar's meetings, labeled per avatar."""
+    org = _org("mem-shared")
+    s1 = _session(org, "bot-sa1", "https://meet.google.com/sss-aaaa-aaa")
+    s1.avatar_id = "cedric"
+    a1 = _artifact("Cedric handled the vendor negotiation.")
+    a1["avatar_id"] = "cedric"
+    assert mm.deposit(s1, a1)
+    s2 = _session(org, "bot-sa2", "https://zoom.us/j/424242")
+    s2.avatar_id = "laura"
+    a2 = _artifact("Laura ran the onboarding review.")
+    a2["avatar_id"] = "laura"
+    assert mm.deposit(s2, a2)
+
+    shared = mm.week_brief(org, "")
+    assert "vendor negotiation" in shared
+    assert "onboarding review" in shared
+    assert "cedric" in shared and "laura" in shared  # attribution labels
+    # Avatar-scoped view still narrows when explicitly requested.
+    only_laura = mm.week_brief(org, "laura")
+    assert "onboarding review" in only_laura
+    assert "vendor negotiation" not in only_laura
+
+
 def test_no_transcript_text_in_any_memory_row(mm, pg):
     org = _org("mem-pii")
     assert mm.deposit(

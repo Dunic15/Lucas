@@ -438,6 +438,29 @@ def test_tool_upcoming_meetings_reads_session_snapshot(client, bearer):
     store.remove("bot_cal")
 
 
+def test_tool_meeting_memory_and_person_lookup_are_dispatchable(client, bearer):
+    """Runtime tool-parity (live 2026-07-31: 'I don't have access to a
+    database with contact info' / 'no access to past meeting notes' while the
+    legacy runtime had both tools). Flag-off here, so the honest disabled
+    string is the correct answer — what matters is that the tool NAMES route
+    instead of 400-ing as unknown."""
+    _el_session("bot_mem")
+    r = _tool(
+        client, "cap-bot_mem", "search_meeting_memory", {"query": "atlas"}, bearer
+    )
+    assert r.status_code == 200, r.text
+    assert "summary" in r.json()["result"]
+    r = _tool(
+        client, "cap-bot_mem", "person_lookup", {"query": "duccio"}, bearer
+    )
+    assert r.status_code == 200, r.text
+    assert "summary" in r.json()["result"]
+    # A genuinely unknown tool still 400s — the chain didn't go permissive.
+    r = _tool(client, "cap-bot_mem", "not_a_tool", {}, bearer)
+    assert r.status_code == 400
+    store.remove("bot_mem")
+
+
 def test_schedule_leave_actually_finalizes(monkeypatch):
     """Live 2026-07-25: three leave_meeting tool calls, ZERO finalizes — the
     unreferenced asyncio task was garbage-collected mid-sleep. The task must
@@ -1343,6 +1366,52 @@ def test_without_a_board_the_prompt_keeps_the_honest_denial():
     assert "asana_board_at_meeting_start" not in prompt
     assert "CANNOT live-read inboxes, drives or task boards" in prompt
     assert "NEVER answer them from your knowledge documents" not in prompt
+
+
+def _memory_prompt(week: str | None) -> str:
+    """The agent prompt build_init_payload would ship for this week digest."""
+    s = _el_session("bot_memory")
+    if week is not None:
+        s.week_digest = week
+    try:
+        payload = voice_agent_api.build_init_payload(s, avatars.load("petra"))
+        prompt = payload["conversation_config_override"]["agent"]["prompt"]["prompt"]
+    finally:
+        store.remove("bot_memory")
+    return " ".join(prompt.split())
+
+
+WEEK = (
+    "07-30 [standup · cedric]: Agreed the Atlas migration ships Sept 1.\n"
+    "07-29 [client call · laura]: Zephyr asked for a security review.\n"
+)
+
+
+def test_week_digest_reaches_the_agent_prompt():
+    """Runtime parity: the EL runtime never sees memory_brief, so the
+    meeting-memory week digest must be bridged explicitly (live 2026-07-31:
+    Cedric denied having past-meeting memory)."""
+    prompt = _memory_prompt(WEEK)
+    assert "Atlas migration ships Sept 1" in prompt, "memory never reached the agent"
+    assert "Zephyr asked for a security review" in prompt
+    assert "cedric" in prompt and "laura" in prompt  # cross-avatar attribution
+    assert "YOU REMEMBER" in prompt
+
+
+def test_without_memory_the_prompt_points_at_the_tools_only():
+    prompt = _memory_prompt("")
+    assert "company_memory_last_7_days" not in prompt
+    assert "YOU REMEMBER" not in prompt
+    # It must still know the recall tools exist rather than denying memory.
+    assert "CALL search_meeting_memory" in prompt
+    assert "person_lookup" in prompt
+
+
+def test_week_digest_is_capped_like_every_other_context_value():
+    import re
+
+    longest = max(len(m) for m in re.findall(r"y+", _memory_prompt("y" * 9000)))
+    assert longest <= 1300, "an unbounded digest would blow the prompt"
 
 
 def test_board_is_capped_like_every_other_context_value():

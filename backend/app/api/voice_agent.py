@@ -125,6 +125,14 @@ def build_init_payload(session, avatar) -> dict:
     board = str(getattr(session, "asana_snapshot", "") or "").strip()
     if board:
         context["asana_board_at_meeting_start"] = board[:2400]
+    # THE WEEK. Same gap-class as the board (2026-07-31 live test: Cedric
+    # denied having past-meeting memory while the legacy path would have had
+    # it): the meeting-memory week digest rides memory_brief, which this
+    # runtime never reaches — bridge it as its own capped context value.
+    # Distilled dated lines only, never transcripts.
+    week = str(getattr(session, "week_digest", "") or "").strip()
+    if week:
+        context["company_memory_last_7_days"] = week[:1300]
 
     prompt = "\n".join(
         [
@@ -221,6 +229,26 @@ def build_init_payload(session, avatar) -> dict:
                     "- You CANNOT live-read inboxes, drives or task boards: say so",
                     "  plainly, offer a QUEUED alternative and if accepted CALL",
                     "  queue_action right away. Never promise unqueued follow-ups.",
+                ]
+            ),
+            # Same shape as the board rule: only claim memory we actually
+            # shipped in this payload (2026-07-31 live test — he denied having
+            # memory he did have).
+            *(
+                [
+                    "- YOU REMEMBER: company_memory_last_7_days below is this",
+                    "  company's last week of meetings (every avatar, every",
+                    "  link). Answer 'what do you remember / what happened",
+                    "  recently' from it WITH DATES. Older or more specific:",
+                    "  CALL search_meeting_memory. A person's email, projects or",
+                    "  who they meet: CALL person_lookup.",
+                ]
+                if context.get("company_memory_last_7_days")
+                else [
+                    "- For past meetings older than this call, CALL",
+                    "  search_meeting_memory; for a person's email or what they",
+                    "  work on, CALL person_lookup. If they return nothing, say",
+                    "  nothing is on record — never invent it.",
                 ]
             ),
             "- Actions run ONCE APPROVED on the dashboard: say 'it's in the",
@@ -346,6 +374,18 @@ async def voice_agent_bootstrap(capability: str, request: Request) -> JSONRespon
                 )
         except Exception as e:  # noqa: BLE001 — no board is worse, never fatal
             print(f"[asana] brief late-read failed: {e}", flush=True)
+
+    # The week digest, same bootstrap-before-gather race as the board:
+    # cached_digest is a stale-ok single-row read (never a model call).
+    if not str(getattr(session, "week_digest", "") or "").strip():
+        try:
+            from ..memory import meeting_memory
+
+            session.week_digest = await run_in_threadpool(
+                meeting_memory.cached_digest, session.org_id, ""
+            ) or ""
+        except Exception:  # noqa: BLE001 — memory is a bonus, never fatal
+            pass
 
     def _mint() -> str:
         with httpx.Client(timeout=15) as client:
@@ -870,6 +910,30 @@ async def voice_agent_tool(capability: str, request: Request) -> JSONResponse:
             result = {
                 "summary": await run_in_threadpool(
                     brain_tools.upcoming_meetings, session
+                )
+            }
+        elif tool_name == "search_meeting_memory":
+            # Runtime tool-parity (live 2026-07-31: Cedric denied having
+            # past-meeting memory while the legacy runtime had the tool):
+            # deep recall over accumulated meeting memory, read-only,
+            # visibility-gated inside the module (all-attendees rule).
+            from ..memory import meeting_memory
+
+            result = {
+                "summary": await run_in_threadpool(
+                    meeting_memory.search,
+                    str(params.get("query") or ""), session,
+                )
+            }
+        elif tool_name == "person_lookup":
+            # Who is X / their email / what they're linked to — org-scoped,
+            # read-only, gated inside the module.
+            from ..memory import meeting_memory
+
+            result = {
+                "summary": await run_in_threadpool(
+                    meeting_memory.lookup_person,
+                    str(params.get("query") or ""), session,
                 )
             }
         elif tool_name == "get_pending_actions":

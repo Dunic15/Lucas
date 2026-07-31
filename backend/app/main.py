@@ -3974,7 +3974,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 run_in_threadpool(
                     meeting_memory.cached_digest,
                     session.org_id,
-                    session.avatar_id,
+                    "",  # org scope — the ONE shared brain (owner 2026-07-31)
                 ),
                 timeout=1.5,
             )

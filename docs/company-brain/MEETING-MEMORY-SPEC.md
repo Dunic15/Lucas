@@ -187,8 +187,20 @@ the stable cross-channel id minted by `ledger.new_action_id()`).
 **Shared org brain vs per-avatar brain.** Both fall out of the same rows:
 scope by `org_id` alone = the **shared org brain** (every meeting, every avatar);
 add `avatar_id` = the **per-avatar brain**. `memory_digests.scope` selects which
-one feeds the brief; the default is `avatar` for the avatar's own recall plus an
-`org` digest for company-wide context, both capped (§8).
+one feeds the brief.
+
+> **As built (2026-07-31, owner direction "this should be the case for Laura
+> too"):** the brief uses **ORG scope** — ONE shared brain. Every avatar
+> (Laura, Cedric, Petra, …) joins knowing every other avatar's meetings from
+> the last week, and each digest line is labeled with the avatar that
+> attended (`07-30 [standup · cedric] …`). The avatar-scoped digest row
+> still exists (`week_brief(org, avatar_id)`) but no app path requests it.
+> **Runtime parity:** avatars on the ElevenLabs-Agent voice runtime never
+> see `memory_brief`, so the digest is bridged as its own context value
+> (`company_memory_last_7_days`, capped 1300) and `search_meeting_memory` +
+> `person_lookup` are added to that runtime's tool chain — otherwise those
+> avatars would write to memory at finalize but be unable to read it live
+> (the 2026-07-31 live test).
 
 ## 6. Entity resolution (no scatter, no duplicates)
 

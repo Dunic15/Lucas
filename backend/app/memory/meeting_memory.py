@@ -623,8 +623,8 @@ def _replace_chunks(conn, org_id, meeting_id, chunks) -> None:
 
 def _window_rows(conn, org_id: str, avatar_id: str) -> list[dict]:
     sql = """
-        SELECT bot_id, meeting_key, meeting_type, summary, decisions_json,
-               actions_json, ended_at::text AS ended_at,
+        SELECT bot_id, meeting_key, meeting_type, avatar_id, summary,
+               decisions_json, actions_json, ended_at::text AS ended_at,
                to_char(ended_at, 'MM-DD') AS day
         FROM memory_meetings
         WHERE org_id = CAST(:org_id AS uuid)
@@ -643,7 +643,10 @@ def _rows_as_input(rows: list[dict]) -> str:
     for r in rows:
         decisions = [d for d in json.loads(r["decisions_json"] or "[]") if d][:3]
         actions = json.loads(r["actions_json"] or "[]")[:3]
-        parts = [f"{r['day']} [{r['meeting_type'] or 'meeting'}] {r['summary'][:200]}"]
+        label = r["meeting_type"] or "meeting"
+        if r.get("avatar_id"):
+            label += f" · {r['avatar_id']}"
+        parts = [f"{r['day']} [{label}] {r['summary'][:200]}"]
         if decisions:
             parts.append("decided: " + "; ".join(d[:100] for d in decisions))
         if actions:
@@ -665,7 +668,10 @@ def _fallback_digest(rows: list[dict], max_chars: int) -> str:
     lines: list[str] = []
     for r in rows:
         decisions = [d for d in json.loads(r["decisions_json"] or "[]") if d]
-        line = f"- {r['day']} [{r['meeting_type'] or 'meeting'}]: {r['summary'][:140]}"
+        label = r["meeting_type"] or "meeting"
+        if r.get("avatar_id"):
+            label += f" · {r['avatar_id']}"
+        line = f"- {r['day']} [{label}]: {r['summary'][:140]}"
         if decisions:
             line += f" Decided: {decisions[0][:100]}"
         lines.append(line)

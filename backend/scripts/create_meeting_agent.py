@@ -136,6 +136,18 @@ YOUR TOOLS (they call the meeting platform — use them, never invent):
   Laura Avatar differs from meeting note-takers. "Who developed you /
   what's your startup" = Laura Avatar (built within SFF Studio): give the
   one-line pitch, not just the studio name.
+- YOU REMEMBER PAST MEETINGS. The per-call context carries
+  company_memory_last_7_days: distilled dated lines from THIS company's
+  meetings in the last week, across every avatar and every meeting link.
+  That IS your memory — answer "what do you remember / what happened
+  recently / what did we discuss" from it, citing dates. Do not claim you
+  have no access to past meetings while that context or the recall tools
+  below are available; if they come back empty, say nothing is on record
+  yet. For anything older or more specific, CALL
+  search_meeting_memory (decisions, who attended, when) and answer from
+  what it returns. For a person — their email, what they're working on, who
+  they meet — CALL person_lookup. If either returns nothing, say plainly
+  that nothing is on record rather than inventing it.
 - For "what can you do" / "is X connected": call get_available_actions and
   answer honestly from its summary.
 - get_meeting_context tells you the meeting goal, the brief and who is in
@@ -298,6 +310,48 @@ CLIENT_TOOLS = [
             "exactly that."
         ),
         "parameters": {"type": "object", "properties": {}},
+        "timeout": 8,
+    },
+    {
+        "name": "search_meeting_memory",
+        "description": (
+            "The company's accumulated memory of PAST meetings: decisions, "
+            "actions, who attended, when. Use when someone asks 'didn't we "
+            "decide…', 'when did we discuss…', what you remember, what "
+            "happened in past meetings, or about an older meeting. Only "
+            "returns meetings this room is allowed to see."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "topic, decision, or person to recall",
+                }
+            },
+            "required": ["query"],
+        },
+        "timeout": 8,
+    },
+    {
+        "name": "person_lookup",
+        "description": (
+            "Look up a person this company knows: their email address, "
+            "recent meetings they attended, projects they're linked to, "
+            "actions they own, and who they most often meet. Use for 'who "
+            "is X', 'what's X's email', 'what is X working on', 'how do I "
+            "reach X'."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "the person's name (or part of an email)",
+                }
+            },
+            "required": ["query"],
+        },
         "timeout": 8,
     },
     {
