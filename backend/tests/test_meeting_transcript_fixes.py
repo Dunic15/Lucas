@@ -281,6 +281,26 @@ def test_brief_claims_follow_fetch_outcome():
     assert "did not load" not in text
 
 
+# ── persona parity: every product avatar gets the same conversation rules ──
+
+def test_product_avatar_personas_are_honest_about_context():
+    """Owner rule: conversation behaviour is IDENTICAL across product avatars
+    (only knowledge, integrations, and the skills they describe differ). The
+    transcript bug was a persona ASSERTING context it might not hold, so both
+    personas must defer to what's actually in context and must not promise a
+    mid-meeting lookup the live path can't do (there are no callable tools on
+    the transcript path — only what the session-start brief put in the
+    prompt)."""
+    for avatar_id in ("laura", "cedric"):
+        p = avatars.load(avatar_id).persona_prompt
+        assert "ACTUALLY" in p, avatar_id          # answer from real context
+        assert "never deny something" in p, avatar_id
+        assert "queue_action" in p, avatar_id      # capture, don't claim done
+        assert "NEVER claim it's already done" in p, avatar_id
+        # No promise to go searching mid-meeting for older material.
+        assert "search the team's meeting memory" not in p, avatar_id
+
+
 # ── ASR keyterms ──
 
 def test_keyterms_from_name_and_setting(monkeypatch):
