@@ -1675,8 +1675,15 @@ EMAIL_SEND = "email.send"
 EMAIL_DRAFT = "email.draft"
 ASANA_CREATE = "asana.create_task"
 _ISO_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+# "reschedule …" always counts; bare move/push/shift needs to target an
+# EXISTING event ("the … meeting") and never idioms like "move forward" /
+# "push on" — otherwise "let's move forward and set up a new sync" would
+# mistype a create as an update (review finding, 2026-07-31: failed safe but
+# silently dropped the create in the stub path).
 _RESCHED_INTENT_RE = re.compile(
-    r"\b(reschedul\w*|move|push|shift)\b[^.?!]*\b(meeting|call|standup|sync|1:1)\b",
+    r"\breschedul\w*\b"
+    r"|\b(?:move|push|shift)\b(?!\s+(?:forward|on|ahead))"
+    r"[^.?!]*\bthe\b[^.?!]*\b(?:meeting|call|standup|sync|1:1)\b",
     re.IGNORECASE,
 )
 _DRAFT_INTENT_RE = re.compile(

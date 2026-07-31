@@ -263,3 +263,26 @@ def test_action_plane_schemas_and_risk():
           "args": {"to": ["a@b.com"], "subject": "s", "body": "b"}}
     assert action_plane.missing_params(dr) == []
     assert action_plane.risk_for(dr) == "low"
+
+
+def test_stub_new_meeting_with_move_idiom_stays_create():
+    """'move ahead and schedule …' must type as a CREATE, not an update (the
+    stub reschedule matcher must not fire on move-idioms or indefinite
+    'a new X' phrasing — review finding 2026-07-31)."""
+    actions = [_action(
+        "Let's move ahead and schedule a new sync meeting on 2026-08-04 "
+        "from 2026-08-04T15:00:00 to 2026-08-04T15:30:00"
+    )]
+    out = brain.type_actions(actions, provider="stub")
+    typed = out[0].get("typed")
+    assert typed and typed["type"] == "calendar.create_event"
+
+
+def test_stub_move_the_meeting_still_reschedules():
+    actions = [_action(
+        "Move the client meeting on 2026-08-03 to 2026-08-04T15:00:00 "
+        "until 2026-08-04T15:30:00"
+    )]
+    out = brain.type_actions(actions, provider="stub")
+    typed = out[0].get("typed")
+    assert typed and typed["type"] == "calendar.update_event"
