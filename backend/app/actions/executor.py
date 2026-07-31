@@ -15,7 +15,9 @@ never raises: any failure becomes a soft "failed" receipt.
 Action shape (the caller — dashboard approve / finalize — supplies it; the
 free-text ledger row is only the correlation via ``action_id``):
     {"type": "calendar.create_event", "event":   {title, start, end, attendees?, ...}}
+    {"type": "calendar.update_event", "event":   {title, original_day, start, end, event_id?}}
     {"type": "email.send",            "message": {to, subject, body}}
+    {"type": "email.draft",           "message": {to, subject, body}}
     {"type": "asana.create_task",     "task":    {name, notes?, project?, assignee?, due_on?}}
     {"type": "asana.update_task",     "task":    {task (gid), completed?, due_on?, ...}}
     {"type": "asana.add_comment",     "task":    {task (gid), text}}
@@ -28,19 +30,26 @@ from ..integrations import asana_client, google_client
 from ..config import settings
 
 CALENDAR_CREATE = "calendar.create_event"
+CALENDAR_UPDATE = "calendar.update_event"
 EMAIL_SEND = "email.send"
+EMAIL_DRAFT = "email.draft"
 ASANA_CREATE = "asana.create_task"
 ASANA_UPDATE = "asana.update_task"
 ASANA_COMMENT = "asana.add_comment"
 ASANA_ACTION_TYPES = frozenset({ASANA_CREATE, ASANA_UPDATE, ASANA_COMMENT})
-NATIVE_ACTION_TYPES = frozenset({CALENDAR_CREATE, EMAIL_SEND}) | ASANA_ACTION_TYPES
+NATIVE_ACTION_TYPES = (
+    frozenset({CALENDAR_CREATE, CALENDAR_UPDATE, EMAIL_SEND, EMAIL_DRAFT})
+    | ASANA_ACTION_TYPES
+)
 
 # Which per-avatar capability toggle governs an action type — the approve
 # seam skips execution on an explicit False for the action's OWN family
 # (an avatar with Google off can still push Asana tasks, and vice versa).
 _CAPABILITY_FAMILY = {
     CALENDAR_CREATE: "google",
+    CALENDAR_UPDATE: "google",
     EMAIL_SEND: "google",
+    EMAIL_DRAFT: "google",
     ASANA_CREATE: "asana",
     ASANA_UPDATE: "asana",
     ASANA_COMMENT: "asana",
@@ -50,7 +59,9 @@ _CAPABILITY_FAMILY = {
 # the OpenClaw route needs the same nouns without running those branches).
 _WHAT = {
     CALENDAR_CREATE: "calendar event",
+    CALENDAR_UPDATE: "calendar update",
     EMAIL_SEND: "email",
+    EMAIL_DRAFT: "email draft",
     ASANA_CREATE: "asana task",
     ASANA_UPDATE: "asana task update",
     ASANA_COMMENT: "asana comment",
@@ -71,9 +82,9 @@ def from_typed(typed: dict | None) -> dict | None:
         return None
     t = str(typed.get("type") or "")
     args = typed.get("args") if isinstance(typed.get("args"), dict) else {}
-    if t == CALENDAR_CREATE:
+    if t in (CALENDAR_CREATE, CALENDAR_UPDATE):
         return {"type": t, "event": args}
-    if t == EMAIL_SEND:
+    if t in (EMAIL_SEND, EMAIL_DRAFT):
         return {"type": t, "message": args}
     if t in ASANA_ACTION_TYPES:
         return {"type": t, "task": args}
@@ -123,9 +134,21 @@ def execute_approved(org_id: str, action_id: str, action: dict) -> dict:
             what, receipt = "calendar event", (
                 result.get("event_url") or result.get("event_id") or ""
             )
+        elif atype == CALENDAR_UPDATE:
+            result = google_client.update_calendar_event(
+                org, action.get("event") or action
+            )
+            what, receipt = "calendar update", (
+                result.get("event_url") or result.get("event_id") or ""
+            )
         elif atype == EMAIL_SEND:
             result = google_client.send_gmail(org, action.get("message") or action)
             what, receipt = "email", result.get("message_id") or ""
+        elif atype == EMAIL_DRAFT:
+            result = google_client.create_gmail_draft(
+                org, action.get("message") or action
+            )
+            what, receipt = "email draft", result.get("draft_id") or ""
         elif atype == ASANA_CREATE:
             result = asana_client.create_task(org, action.get("task") or action)
             what, receipt = "asana task", (

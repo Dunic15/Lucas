@@ -217,7 +217,9 @@ def test_stub_producer_maps_leftovers_to_asana_only_when_allowed():
     typed = type_actions(actions, provider="stub", allow_asana=True)
     assert typed[0]["typed"]["type"] == "asana.create_task"
     assert typed[0]["typed"]["args"]["name"] == actions[0]["item"]
-    assert typed[1]["typed"]["type"] == "email.send"  # email intent still wins
+    # Email intent still wins over the Asana fallback; draft-first (default
+    # ON, no owner domain known here) downgrades the send to a Gmail draft.
+    assert typed[1]["typed"]["type"] == "email.draft"
 
 
 def test_sanitize_asana_grounding_rules():

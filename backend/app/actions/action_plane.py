@@ -62,7 +62,25 @@ PARAMS_SCHEMAS: dict[str, list[dict[str, Any]]] = {
                description="attendee emails"),
         _FIELD(name="description", type="string", required=False),
     ],
+    "calendar.update_event": [
+        _FIELD(name="title", type="string", required=True,
+               description="exact title of the EXISTING event"),
+        _FIELD(name="original_day", type="string", required=True,
+               description="YYYY-MM-DD the event currently sits on"),
+        _FIELD(name="start", type="string", required=True,
+               description="ISO 8601 new start"),
+        _FIELD(name="end", type="string", required=True,
+               description="ISO 8601 new end"),
+        _FIELD(name="event_id", type="string", required=False,
+               description="exact event id (skips the title+day resolve)"),
+    ],
     "email.send": [
+        _FIELD(name="to", type="array", required=True,
+               description="recipient emails"),
+        _FIELD(name="subject", type="string", required=True),
+        _FIELD(name="body", type="string", required=True),
+    ],
+    "email.draft": [
         _FIELD(name="to", type="array", required=True,
                description="recipient emails"),
         _FIELD(name="subject", type="string", required=True),
@@ -94,7 +112,12 @@ PARAMS_SCHEMAS: dict[str, list[dict[str, Any]]] = {
 # in the team's own tools does not.
 RISK_BY_TYPE: dict[str, str] = {
     "calendar.create_event": "low",
+    # An update touches an EXISTING event but only the owner's own calendar
+    # (and fails on ambiguity rather than guessing) — same class as create.
+    "calendar.update_event": "low",
     "email.send": "medium",
+    # A draft never leaves the tenant — that's the point of draft-first.
+    "email.draft": "low",
     "asana.create_task": "low",
     "asana.update_task": "low",
     "asana.add_comment": "low",

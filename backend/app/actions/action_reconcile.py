@@ -81,27 +81,23 @@ def _settle(org_id: str, action_id: str, status: str, detail: str,
 def _find_calendar_event(org_id: str, args: dict) -> tuple[str, str]:
     """('found', url) | ('absent', '') | ('error', '') for the intended event.
 
-    Match rule: same title (case/space-insensitive) with a start inside a
-    ±1-day read window around the intended slot — deliberately narrow enough
-    to avoid claiming an unrelated meeting as the receipt."""
+    Match rule (google_client.find_calendar_event — ONE implementation shared
+    with update_calendar_event's resolver): same title (case/space-
+    insensitive) with a start inside the intended day's window — deliberately
+    narrow enough to avoid claiming an unrelated meeting as the receipt."""
     from ..integrations import google_client
 
-    title = " ".join(str(args.get("title") or "").split()).lower()
+    title = str(args.get("title") or "")
     start = str(args.get("start") or "").strip()
-    if not title or not start:
+    if not title.strip() or not start:
         return "error", ""
-    day = start[:10]
-    result = google_client.list_calendar_events(
-        org_id, max_results=200,
-        time_min=f"{day}T00:00:00Z",
-        time_max=f"{day}T23:59:59Z",
-    )
-    if not result.get("ok"):
+    found = google_client.find_calendar_event(org_id, title, start[:10])
+    if not found.get("ok"):
         return "error", ""
-    for event in result.get("events") or []:
-        summary = " ".join(str(event.get("summary") or "").split()).lower()
-        if summary == title:
-            return "found", str(event.get("htmlLink") or event.get("id") or "")
+    matches = found.get("matches") or []
+    if matches:
+        m = matches[0]
+        return "found", str(m.get("url") or m.get("id") or "")
     return "absent", ""
 
 
@@ -111,6 +107,21 @@ def _reconcile_row(org_id: str, row: dict) -> bool:
     typed = row.get("typed_json") if isinstance(row.get("typed_json"), dict) else {}
     args = typed.get("args") if isinstance(typed.get("args"), dict) else {}
     expired_for = float(row.get("expired_for") or 0)
+
+    if typed.get("type") == "calendar.update_event":
+        # Verify the reschedule landed: the event (by title) now starts at the
+        # NEW time's day — found means the patch (or a manual move) happened.
+        verdict, url = _find_calendar_event(org_id, args)
+        if verdict == "found":
+            _settle(
+                org_id, action_id, "done",
+                f"reconciled · calendar update · {url}"[:300],
+                {"kind": "calendar update", "ref": url, "route": "native",
+                 "reconciled": True},
+            )
+            return True
+        # absent/error: the old event may simply still hold its old slot —
+        # never claim failure from a narrow read; the grace settle applies.
 
     if typed.get("type") == "calendar.create_event":
         verdict, url = _find_calendar_event(org_id, args)

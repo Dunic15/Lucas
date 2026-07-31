@@ -1606,17 +1606,27 @@ def _finish_artifact(artifact: dict, state: "meeting_state.MeetingState") -> dic
 # is NOT passed here — only already-distilled fields flow — so this adds no PII
 # surface beyond what post_meeting already sent to the post model.
 TYPED_ACTION_SYSTEM = """You convert a meeting's action items into typed, \
-executable specs, but ONLY when an item unambiguously maps to one of the two \
+executable specs, but ONLY when an item unambiguously maps to one of the \
 supported actions AND every required field is present in the SOURCE TEXT given \
-for that item. The two types:
+for that item. The types:
 
-- "calendar.create_event": schedule a meeting/call. Required args: title, \
+- "calendar.create_event": schedule a NEW meeting/call. Required args: title, \
 start, end (both full ISO-8601 date-times, e.g. 2026-08-01T15:00:00). \
 attendees is optional (email addresses only). Use TODAY (given below) only to \
 resolve a date/time the item itself states ("Friday 3pm"); if the item states \
 no concrete time, DO NOT emit this type.
+- "calendar.update_event": move/reschedule an EXISTING meeting to a new time. \
+Required args: title (the existing event's name exactly as the item states \
+it), original_day (YYYY-MM-DD the event currently sits on — from the item, or \
+TODAY when it says "today's meeting"), start, end (the NEW ISO-8601 times). \
+Emit ONLY when the item names an existing meeting AND states a concrete new \
+time; otherwise leave the item untyped. Never use this for a brand-new \
+meeting.
 - "email.send": send an email. Required args: to (one or more email addresses \
 that LITERALLY appear in the item's source text), subject. body is optional.
+- "email.draft": prepare an email as a Gmail DRAFT for the owner to review — \
+same required args as email.send. Use when the ask is to draft/prepare/write \
+an email rather than explicitly send it.
 
 HARD RULES (precision over recall):
 - NEVER invent a recipient, an email address, a date, or a time. Use ONLY \
@@ -1660,9 +1670,19 @@ _CAL_INTENT_RE = re.compile(
 )
 
 CALENDAR_CREATE = "calendar.create_event"
+CALENDAR_UPDATE = "calendar.update_event"
 EMAIL_SEND = "email.send"
+EMAIL_DRAFT = "email.draft"
 ASANA_CREATE = "asana.create_task"
 _ISO_DATE_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+_RESCHED_INTENT_RE = re.compile(
+    r"\b(reschedul\w*|move|push|shift)\b[^.?!]*\b(meeting|call|standup|sync|1:1)\b",
+    re.IGNORECASE,
+)
+_DRAFT_INTENT_RE = re.compile(
+    r"\b(draft|prepare|write up)\b[^.?!]*\b(e-?mail|note|reply|message)\b",
+    re.IGNORECASE,
+)
 
 
 def _grounded_emails(value: object, source: str) -> list[str]:
@@ -1715,15 +1735,34 @@ def _sanitize_typed(typed: object, action: dict, brief: str = "") -> dict | None
     t = str(typed.get("type") or "").strip()
     args = typed.get("args") if isinstance(typed.get("args"), dict) else {}
     source = _action_source(action, brief)
-    if t == EMAIL_SEND:
+    if t in (EMAIL_SEND, EMAIL_DRAFT):
         to = _grounded_emails(args.get("to"), source)
         if not to:
-            return None  # no grounded recipient → never send
+            return None  # no grounded recipient → never send (or draft)
         subject = str(args.get("subject") or "").strip()[:200]
         body = str(args.get("body") or "").strip()[:4000]
         if not subject and not body:
             subject = str(action.get("item") or "").strip()[:200]
         return {"type": t, "args": {"to": to, "subject": subject, "body": body}}
+    if t == CALENDAR_UPDATE:
+        # A reschedule targets an EXISTING event — title comes from the args
+        # only (never the whole item text: the resolver matches it against
+        # real calendar titles, and a non-matching title fails safe into the
+        # needs-details door rather than moving the wrong meeting).
+        title = str(args.get("title") or args.get("summary") or "").strip()[:200]
+        original_day = str(args.get("original_day") or "").strip()
+        start = str(args.get("start") or "").strip()
+        end = str(args.get("end") or "").strip()
+        if not title or not _ISO_DATE_RE.fullmatch(original_day):
+            return None
+        if not _is_isoish(start) or not _is_isoish(end):
+            return None
+        spec_args = {"title": title, "original_day": original_day,
+                     "start": start, "end": end}
+        event_id = str(args.get("event_id") or "").strip()[:200]
+        if event_id:
+            spec_args["event_id"] = event_id
+        return {"type": t, "args": spec_args}
     if t == CALENDAR_CREATE:
         title = str(
             args.get("title") or args.get("summary") or action.get("item") or ""
@@ -1778,14 +1817,35 @@ def _stub_type_actions(
     for i, a in indexed:
         item = str(a.get("item") or "")
         source = _action_source(a, brief)
-        if _EMAIL_INTENT_RE.search(item):
+        if _EMAIL_INTENT_RE.search(item) or _DRAFT_INTENT_RE.search(item):
             emails = _grounded_emails(source, source)
             if emails:
+                etype = EMAIL_DRAFT if _DRAFT_INTENT_RE.search(item) else EMAIL_SEND
                 out[i] = _sanitize_typed(
-                    {"type": EMAIL_SEND, "args": {"to": emails, "subject": item}},
+                    {"type": etype, "args": {"to": emails, "subject": item}},
                     a, brief,
                 ) or out.get(i)
                 if out.get(i):
+                    continue
+        if _RESCHED_INTENT_RE.search(item):
+            # Reschedule needs the NEW slot (2 datetimes) plus the day the
+            # event currently sits on (a standalone ISO date in the source —
+            # datetimes don't match _ISO_DATE_RE, so no collision). The item
+            # text stands in for the title; a non-matching title fails safe
+            # at the resolver into the needs-details door.
+            dts = _ISO_DT_RE.findall(source)
+            dates = _ISO_DATE_RE.findall(source)
+            if len(dts) >= 2 and dates:
+                spec = _sanitize_typed(
+                    {
+                        "type": CALENDAR_UPDATE,
+                        "args": {"title": item, "original_day": dates[0],
+                                 "start": dts[0], "end": dts[1]},
+                    },
+                    a, brief,
+                )
+                if spec:
+                    out[i] = spec
                     continue
         if _CAL_INTENT_RE.search(item):
             dts = _ISO_DT_RE.findall(source)
@@ -1866,14 +1926,37 @@ def _llm_type_actions(
     return out
 
 
+def _draft_first(mapping: dict[int, dict], owner_email: str) -> dict[int, dict]:
+    """The EA operating-agreement guardrail (settings.email_draft_first, ON by
+    default): an email.send whose recipients aren't all on the owner's own
+    domain becomes an email.draft — nothing leaves the tenant until the owner
+    reviews it in Gmail. With no owner domain known, EVERY send downgrades
+    (can't prove internal → treat as external). Flag off → byte-identical."""
+    if not settings.email_draft_first:
+        return mapping
+    domain = str(owner_email or "").partition("@")[2].strip().lower()
+    for i, spec in mapping.items():
+        if not (isinstance(spec, dict) and spec.get("type") == EMAIL_SEND):
+            continue
+        to = (spec.get("args") or {}).get("to") or []
+        external = not domain or any(
+            str(t).partition("@")[2].strip().lower() != domain for t in to
+        )
+        if external:
+            mapping[i] = {"type": EMAIL_DRAFT, "args": dict(spec.get("args") or {})}
+    return mapping
+
+
 def type_actions(
     actions: list, brief: str = "", *, provider: str | None = None,
-    allow_asana: bool = False,
+    allow_asana: bool = False, owner_email: str = "",
 ) -> list:
     """Annotate each action with a ``typed`` spec where it clearly maps to a
-    native-executor action (calendar.create_event / email.send, plus
-    asana.create_task when ``allow_asana`` — set by finalize only for an
-    avatar that MAY use the org's connected Asana).
+    native-executor action (calendar.create_event / calendar.update_event /
+    email.send / email.draft, plus asana.create_task when ``allow_asana`` —
+    set by finalize only for an avatar that MAY use the org's connected
+    Asana). ``owner_email`` (the connected Google account) powers the
+    draft-first downgrade for external recipients.
 
     Returns a NEW list; an action that doesn't map is returned unchanged (no
     ``typed`` key). Never invents recipients or times — args draw only from that
@@ -1893,6 +1976,7 @@ def type_actions(
             if prov == "stub"
             else _llm_type_actions(indexed, brief, prov, allow_asana=allow_asana)
         )
+        mapping = _draft_first(mapping, owner_email)
     except Exception as e:  # noqa: BLE001 — enrichment only, never fatal
         print(f"[type_actions] skipped ({type(e).__name__})", flush=True)
         return src

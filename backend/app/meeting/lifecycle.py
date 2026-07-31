@@ -961,9 +961,17 @@ async def _finalize_session_locked(
                 _avatar_asana_enabled, session.org_id, session.avatar_id
             )
             summary_brief = artifact.get("summary") or ""
+            # The connected account's address powers the draft-first
+            # downgrade (external recipients → email.draft). Best-effort:
+            # "" simply means "can't prove internal" and drafts everything.
+            _owner_oauth = await run_in_threadpool(
+                store.get_org_oauth, session.org_id
+            )
+            _owner_email = str((_owner_oauth or {}).get("email") or "")
             artifact["actions"] = await run_in_threadpool(
                 lambda: type_actions(
-                    artifact["actions"], summary_brief, allow_asana=allow_asana
+                    artifact["actions"], summary_brief, allow_asana=allow_asana,
+                    owner_email=_owner_email,
                 )
             )
             artifact["checklist"] = artifact["actions"]

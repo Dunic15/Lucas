@@ -260,6 +260,13 @@ class Settings(BaseSettings):
     # NATIVE_EXECUTOR=false to fall back to the Cedric-brokered path.
     # See backend/app/executor.py + google_client.py.
     native_executor: bool = True
+    # Draft-first email (the EA operating-agreement guardrail): a typed
+    # email.send whose recipients aren't all on the owner's own domain is
+    # downgraded to email.draft at typing time — the message lands in the
+    # owner's Gmail drafts for review instead of leaving the tenant. ON by
+    # default (strictly risk-reducing); EMAIL_DRAFT_FIRST=false restores
+    # send-typed external email. See brain/engine._draft_first.
+    email_draft_first: bool = True
     # OpenClaw action route (dev): with this ON, every approved action the
     # executor handles is performed by the local OpenClaw gateway agent (and
     # its connected tools) instead of the in-process vendor clients — the

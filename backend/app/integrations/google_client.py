@@ -40,6 +40,7 @@ _CAL_CALENDARS = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
 _FREEBUSY = "https://www.googleapis.com/calendar/v3/freeBusy"
 _CAL_SETTINGS_TZ = "https://www.googleapis.com/calendar/v3/users/me/settings/timezone"
 _GMAIL_SEND = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
+_GMAIL_DRAFTS = "https://gmail.googleapis.com/gmail/v1/users/me/drafts"
 _TIMEOUT = 30.0
 # The upcoming-events read fans out over every accessible calendar in the
 # connected Google account, not just primary or calendars currently checked in
@@ -527,6 +528,115 @@ def add_calendar_event_attendee(
     }
 
 
+def find_calendar_event(org_id: str, title: str, day: str) -> dict:
+    """All events matching an exact (case/space-insensitive) title within one
+    day's window — ``{ok, matches: [{id, url, start}]}``, ok=False on a read
+    error. Shared by the reconciler (verify a create really happened) and
+    update_calendar_event (resolve which event a spoken reschedule means) so
+    the two can never disagree on the match rule. Deliberately narrow: an
+    unrelated meeting must never be claimed or moved."""
+    t = " ".join(str(title or "").split()).lower()
+    d = str(day or "").strip()[:10]
+    if not t or not d:
+        return {"ok": False, "error": "title and day are required", "matches": []}
+    result = list_calendar_events(
+        org_id, max_results=200,
+        time_min=f"{d}T00:00:00Z", time_max=f"{d}T23:59:59Z",
+    )
+    if not result.get("ok"):
+        return {"ok": False, "error": str(result.get("error") or "calendar read failed"),
+                "matches": []}
+    matches = []
+    for event in result.get("events") or []:
+        summary = " ".join(str(event.get("summary") or "").split()).lower()
+        if summary == t:
+            start = event.get("start") or {}
+            matches.append({
+                "id": str(event.get("id") or ""),
+                "url": str(event.get("htmlLink") or ""),
+                "start": str(start.get("dateTime") or start.get("date") or ""),
+            })
+    return {"ok": True, "matches": matches}
+
+
+def update_calendar_event(org_id: str, event: dict) -> dict:
+    """Reschedule an EXISTING primary-calendar event (events.patch).
+
+    ``event``: {title, original_day (YYYY-MM-DD), start, end (RFC3339),
+    event_id?, timezone?}. Without an explicit event_id the event is resolved
+    by exact title within original_day's window — and the call FAILS on zero
+    or multiple matches rather than guessing (the wrong-meeting blast radius
+    must stay zero; ambiguity routes back to the needs-details door). Guests
+    are notified (sendUpdates=all). GET-then-PATCH like
+    add_calendar_event_attendee; same soft-fail contract."""
+    start = str(event.get("start") or "").strip()
+    end = str(event.get("end") or "").strip()
+    if not start or not end:
+        return {"ok": False, "error": "event needs the new start and end"}
+    tz = str(event.get("timezone") or event.get("time_zone") or "UTC").strip() or "UTC"
+    event_id = str(event.get("event_id") or "").strip()
+    title = str(event.get("title") or event.get("summary") or "").strip()
+    if not event_id:
+        original_day = str(event.get("original_day") or "").strip()
+        if not title or not original_day:
+            return {"ok": False,
+                    "error": "event needs an event_id or title + original_day"}
+        found = find_calendar_event(org_id, title, original_day)
+        if not found.get("ok"):
+            return {"ok": False, "error": str(found.get("error") or "calendar read failed")}
+        matches = found["matches"]
+        if not matches:
+            return {"ok": False, "error": (
+                f"no event titled '{title}' found on {original_day} — "
+                "needs the exact event"
+            )}
+        if len(matches) > 1:
+            return {"ok": False, "error": (
+                f"{len(matches)} events titled '{title}' on {original_day} — "
+                "needs the exact event"
+            )}
+        event_id = matches[0]["id"]
+
+    token, err = _access_token(org_id)
+    if err:
+        return {"ok": False, "error": err}
+    headers = {"Authorization": f"Bearer {token}"}
+    event_url = f"{_cal_events_url('primary')}/{quote(event_id, safe='')}"
+    try:
+        current = httpx.get(event_url, headers=headers, timeout=_TIMEOUT)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"calendar event read failed ({type(e).__name__})"}
+    if current.status_code == 401:
+        _drop_cached_token(org_id)
+    if current.status_code >= 300:
+        return {"ok": False,
+                "error": f"calendar event read failed (HTTP {current.status_code})"}
+    try:
+        patched = httpx.patch(
+            event_url,
+            params={"sendUpdates": "all"},
+            headers=headers,
+            json={
+                "start": {"dateTime": start, "timeZone": tz},
+                "end": {"dateTime": end, "timeZone": tz},
+            },
+            timeout=_TIMEOUT,
+        )
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"calendar event update failed ({type(e).__name__})"}
+    if patched.status_code == 401:
+        _drop_cached_token(org_id)
+    if patched.status_code >= 300:
+        return {"ok": False,
+                "error": f"calendar event update failed (HTTP {patched.status_code})"}
+    data = patched.json()
+    return {
+        "ok": True,
+        "event_id": str(data.get("id") or event_id),
+        "event_url": str(data.get("htmlLink") or ""),
+    }
+
+
 def list_calendar_events(
     org_id: str, *, max_results: int = 20,
     oauth: dict | None = None, principal: str = "", on_rotate=None,
@@ -914,18 +1024,11 @@ def _rfc822_id(value: Any) -> str:
     return mid if mid.startswith("<") and mid.endswith(">") else f"<{mid}>"
 
 
-def send_gmail(org_id: str, message: dict) -> dict:
-    """Send an email as the org's Google account (Gmail messages.send).
-
-    ``message``: {to (str|list of emails), subject, body, cc?, bcc?,
-    html_body?, thread_id?, in_reply_to?}. All extras are optional and the
-    plain {to, subject, body} call is byte-identical to before:
-    - ``html_body`` → multipart/alternative (plaintext part first, so clients
-      that prefer HTML render it and plain-text clients still get the body).
-    - ``thread_id`` (Gmail's threadId) + ``in_reply_to`` (the RFC 822
-      Message-ID being answered) turn the send into a real reply: Gmail
-      threads on threadId, strict clients thread on In-Reply-To/References.
-    - ``bcc`` rides in the raw MIME; Gmail strips the header on delivery."""
+def _gmail_payload(message: dict) -> tuple[dict | None, str]:
+    """Build the Gmail API body ({raw[, threadId]}) from a message dict, or
+    (None, error) when the message can't form a valid email. ONE MIME builder
+    shared by send_gmail and create_gmail_draft so a draft is byte-identical
+    to what a send would have produced."""
     to = _emails(message.get("to"))
     cc = _emails(message.get("cc"))
     bcc = _emails(message.get("bcc"))
@@ -933,13 +1036,9 @@ def send_gmail(org_id: str, message: dict) -> dict:
     text = str(message.get("body") or message.get("text") or "")
     html = str(message.get("html_body") or message.get("html") or "")
     if not to:
-        return {"ok": False, "error": "email needs at least one recipient"}
+        return None, "email needs at least one recipient"
     if not subject and not text and not html:
-        return {"ok": False, "error": "email needs a subject or a body"}
-
-    token, err = _access_token(org_id)
-    if err:
-        return {"ok": False, "error": err}
+        return None, "email needs a subject or a body"
 
     if html:
         mime: Any = MIMEMultipart("alternative")
@@ -963,6 +1062,81 @@ def send_gmail(org_id: str, message: dict) -> dict:
     thread_id = str(message.get("thread_id") or "").strip()
     if thread_id:
         payload["threadId"] = thread_id
+    return payload, ""
+
+
+def create_gmail_draft(org_id: str, message: dict) -> dict:
+    """Create a Gmail DRAFT (drafts.create) instead of sending — the
+    draft-first guardrail for external recipients: nothing leaves the tenant
+    until the owner reviews it in their own Gmail. Same ``message`` shape and
+    MIME build as send_gmail. Requires the gmail.compose scope (the PA scope
+    bundle); pre-bundle connections soft-fail until reconnected."""
+    payload, perr = _gmail_payload(message)
+    if perr:
+        return {"ok": False, "error": perr}
+
+    token, err = _access_token(org_id)
+    if err:
+        return {"ok": False, "error": err}
+
+    def _post(tok: str):
+        return httpx.post(
+            _GMAIL_DRAFTS,
+            headers={"Authorization": f"Bearer {tok}"},
+            json={"message": payload},
+            timeout=_TIMEOUT,
+        )
+
+    try:
+        resp = _post(token)
+        if resp.status_code == 401:
+            _drop_cached_token(org_id)
+        if resp.status_code == 403:
+            # Token minted before gmail.compose was granted: re-mint once,
+            # then surface a distilled reconnect message (same self-heal
+            # pattern as freebusy / people_client).
+            _drop_cached_token(org_id)
+            fresh, ferr = _access_token(org_id, force_refresh=True)
+            if not ferr and fresh and fresh != token:
+                resp = _post(fresh)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"gmail request failed ({type(e).__name__})"}
+    if resp.status_code == 403:
+        return {"ok": False, "error": (
+            "the Google connection is missing the draft permission — "
+            "reconnect Google in the dashboard to grant it"
+        )}
+    if resp.status_code >= 300:
+        return {"ok": False, "error": f"gmail draft failed (HTTP {resp.status_code})"}
+    data = resp.json() or {}
+    msg = data.get("message") or {}
+    return {
+        "ok": True,
+        "draft_id": data.get("id", ""),
+        "message_id": msg.get("id", ""),
+        "thread_id": msg.get("threadId", ""),
+    }
+
+
+def send_gmail(org_id: str, message: dict) -> dict:
+    """Send an email as the org's Google account (Gmail messages.send).
+
+    ``message``: {to (str|list of emails), subject, body, cc?, bcc?,
+    html_body?, thread_id?, in_reply_to?}. All extras are optional and the
+    plain {to, subject, body} call is byte-identical to before:
+    - ``html_body`` → multipart/alternative (plaintext part first, so clients
+      that prefer HTML render it and plain-text clients still get the body).
+    - ``thread_id`` (Gmail's threadId) + ``in_reply_to`` (the RFC 822
+      Message-ID being answered) turn the send into a real reply: Gmail
+      threads on threadId, strict clients thread on In-Reply-To/References.
+    - ``bcc`` rides in the raw MIME; Gmail strips the header on delivery."""
+    payload, perr = _gmail_payload(message)
+    if perr:
+        return {"ok": False, "error": perr}
+
+    token, err = _access_token(org_id)
+    if err:
+        return {"ok": False, "error": err}
 
     try:
         resp = httpx.post(

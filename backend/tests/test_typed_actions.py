@@ -36,9 +36,19 @@ def _typed(action: dict) -> dict | None:
 
 def test_email_action_maps_with_grounded_recipient():
     typed = _typed({"item": "Email the recap to marco@acme.com", "owner": "Ben"})
-    assert typed["type"] == "email.send"
+    # With no owner domain known, draft-first (default ON) downgrades the
+    # send to a Gmail draft — the recipient can't be proven internal.
+    assert typed["type"] == "email.draft"
     assert typed["args"]["to"] == ["marco@acme.com"]
     assert typed["args"]["subject"]  # derived from the item, non-empty
+
+
+def test_email_action_stays_send_for_internal_recipient():
+    typed = brain.type_actions(
+        [{"item": "Email the recap to marco@acme.com", "owner": "Ben"}],
+        owner_email="ben@acme.com",
+    )[0].get("typed")
+    assert typed["type"] == "email.send"
 
 
 def test_calendar_action_maps_with_two_iso_datetimes():

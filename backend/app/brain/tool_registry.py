@@ -68,11 +68,13 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
         except Exception:  # noqa: BLE001 — absence of a token is not an error
             google_on = False
         reg["native"].append({
-            "name": "google_calendar", "does": "schedule meetings on the owner's Google",
+            "name": "google_calendar",
+            "does": "schedule and reschedule meetings on the owner's Google",
             "kind": "native", "write": True, "approval": "approve", "connected": google_on,
         })
         reg["native"].append({
-            "name": "gmail_send", "does": "send email as the owner",
+            "name": "gmail_send",
+            "does": "send email as the owner (draft-first for external recipients)",
             "kind": "native", "write": True, "approval": "approve", "connected": google_on,
         })
 
@@ -218,7 +220,8 @@ def brief(reg: dict | None) -> str:
     lines = ["[YOUR TOOLS — this meeting]"]
     lines.append(
         "Native: capture any requested task for approval (queue_action); "
-        + ("Google Calendar + Gmail (connected — executed after owner approval); "
+        + ("Google Calendar + Gmail (connected — schedule, reschedule, send "
+           "or draft email; executed after owner approval); "
            if google_on else
            "Google Calendar + Gmail NOT connected (owner can connect in the dashboard); ")
         + ("Asana tasks (connected — executed after owner approval); "
