@@ -493,6 +493,18 @@ class Settings(BaseSettings):
     # cooldown and the deference wait (dialogue context is a first-class
     # addressee signal). 0 disables.
     followup_window_seconds: float = 15.0
+    # Awaiting-reply window: when SHE ends a spoken line with a question
+    # ("what time works for you?"), the next human line within this window
+    # counts as addressed — even in address-only group mode, where a real
+    # meeting once required re-saying her name to ANSWER HER OWN QUESTION.
+    # Consumed on first use (one reply per question — never a standing
+    # bypass, so the never-speak-over-anyone rule holds). 0 disables.
+    awaiting_reply_seconds: float = 20.0
+    # Comma-separated names the ASR should bias toward (product/team names —
+    # e.g. "Lauratar, Duccio, SFF Studio"): they otherwise arrive garbled
+    # ("Larata") and land verbatim in meeting titles and action items. The
+    # avatar's own name is always included. Deepgram nova-3 keyterms only.
+    asr_keyterms: str = ""
     # Address-only group mode (owner rule 2026-07-29, after the "other Cedric"
     # talk-over): with this many or more HUMANS in the roster, she speaks ONLY
     # when addressed by name — no follow-up window, no deference answers, no

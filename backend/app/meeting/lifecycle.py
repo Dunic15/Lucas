@@ -542,6 +542,35 @@ async def _start_avatar_session(
     #                search_tools with zero network in-meeting)
     #   calendar   — the owner org's upcoming meetings (feeds the
     #                upcoming_meetings brain tool, zero network in-meeting)
+    await refresh_session_brief(session, avatar, meeting_url, org_id)
+    if settings.autopilot_brief and session.memory_brief:
+        # Autopilot: mail/Slack "what's still open from last time" to the
+        # owner as the bot joins. Fire-and-forget — never delays the join.
+        asyncio.create_task(
+            run_in_threadpool(autopilot.maybe_send_brief, meeting_url, avatar.name)
+        )
+    # Photoreal only: wake the GPU box for this meeting (fire-and-forget; the
+    # page runs on the static-portrait fallback until the stream comes up).
+    gpu_runtime.on_session_started()
+    runpod_runtime.on_session_started(avatar.page)
+    return {
+        "bot_id": bot["id"],
+        "conversation_id": conversation_id,
+        "avatar_page_url": avatar_url,
+        "scheduled_for": join_at,
+    }
+
+
+async def refresh_session_brief(session, avatar, meeting_url: str, org_id: str) -> None:
+    """(Re)compose the session-start brief onto ``session.memory_brief``.
+
+    Shared by the join path AND the mid-meeting restart recovery (main.py) —
+    a replaced instance once rebuilt only carryover+week, silently losing the
+    Drive/Asana/calendar/tools blocks, so the avatar's claimed capabilities
+    literally changed mid-call. Every read is best-effort and off the live
+    path; the tool-registry claims are set from the ACTUAL fetch outcomes so
+    the avatar never asserts a brief it doesn't hold."""
+
     async def _quiet(coro):
         try:
             return await coro
@@ -607,6 +636,13 @@ async def _start_avatar_session(
             f"{asana_snapshot}\n\n" + (session.memory_brief or "")
         )
     if reg:
+        # Honest capability claims: the registry's knowledge flags are set
+        # from what was ACTUALLY fetched this session, not from config
+        # presence — a configured-but-unloaded Drive folder once made the
+        # avatar assert Drive access and then deny it two turns later.
+        know = reg.setdefault("knowledge", {})
+        know["drive_folder"] = bool(folder)
+        know["calendar"] = bool(cal_brief)
         session.tool_registry = reg
         tools_brief = tool_registry.brief(reg)
         if tools_brief:
@@ -628,22 +664,6 @@ async def _start_avatar_session(
             f"distilled from past meetings with dates]\n{week}\n\n"
             + (session.memory_brief or "")
         )
-    if settings.autopilot_brief and session.memory_brief:
-        # Autopilot: mail/Slack "what's still open from last time" to the
-        # owner as the bot joins. Fire-and-forget — never delays the join.
-        asyncio.create_task(
-            run_in_threadpool(autopilot.maybe_send_brief, meeting_url, avatar.name)
-        )
-    # Photoreal only: wake the GPU box for this meeting (fire-and-forget; the
-    # page runs on the static-portrait fallback until the stream comes up).
-    gpu_runtime.on_session_started()
-    runpod_runtime.on_session_started(avatar.page)
-    return {
-        "bot_id": bot["id"],
-        "conversation_id": conversation_id,
-        "avatar_page_url": avatar_url,
-        "scheduled_for": join_at,
-    }
 
 
 async def _finalize_session(

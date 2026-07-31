@@ -187,7 +187,22 @@ def auth_check() -> dict:
     }
 
 
-def _transcript_provider_config(provider_override: str | None = None) -> dict:
+def _keyterms(bot_name: str = "") -> list[str]:
+    """Names the ASR should bias toward: the avatar's own name (its garbling
+    cost real wake-ups — "Sedger"/"Hedrik" for Cedric) plus the deployment's
+    ASR_KEYTERMS (product/team names like "Lauratar" that otherwise land
+    garbled in action titles). Deduped, order-stable, bounded."""
+    terms: list[str] = []
+    for t in [bot_name, *settings.asr_keyterms.split(",")]:
+        t = t.strip()
+        if t and t.lower() not in {x.lower() for x in terms}:
+            terms.append(t)
+    return terms[:20]
+
+
+def _transcript_provider_config(
+    provider_override: str | None = None, keyterms: list[str] | None = None
+) -> dict:
     """Return the Recall recording_config.transcript.provider payload."""
     provider = (provider_override or settings.recall_transcription_provider).strip().lower()
 
@@ -211,6 +226,11 @@ def _transcript_provider_config(provider_override: str | None = None) -> dict:
         language = settings.deepgram_language.strip()
         if language:
             config["language"] = language
+        # nova-3 keyterm prompting: bias recognition toward the avatar's name
+        # and deployment-configured product/team names. Deepgram-only — the
+        # other providers have no equivalent knob through Recall today.
+        if keyterms:
+            config["keyterm"] = keyterms
         return {"deepgram_streaming": config}
 
     if provider in {"recallai", "recallai_streaming"}:
@@ -327,7 +347,7 @@ def _create_bot_attempts(
     realtime_capability: str = "",
     attach_ears: bool = False,
 ) -> list[tuple[str, dict]]:
-    configured_provider = _transcript_provider_config()
+    configured_provider = _transcript_provider_config(keyterms=_keyterms(bot_name))
     attempts: list[tuple[str, dict]] = []
 
     for variant in _OUTPUT_VARIANTS:

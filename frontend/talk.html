@@ -376,10 +376,13 @@
     return { audio, words, wtimes, wdurations };
   }
   async function synthesize(text) {
+    // 15s abort: a hung /tts once pinned _pendingSay > 0 forever, which kept
+    // the speaking heartbeat true and wedged the backend's barge-in window.
     const r = await fetch("/tts", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text, avatar_id: avatarId }),
+      signal: AbortSignal.timeout(15000),
     });
     if (!r.ok) throw new Error("/tts not available yet (" + r.status + ")");
     const j = await r.json();
@@ -423,6 +426,10 @@
     // interrupt, swallowing real follow-up questions as "her own echo".
     speakingUntil = 0;
     herText = "";
+    // The pending counter's decrements live in the dropped chain's finally
+    // blocks — they still run, but until they do the speaking heartbeat reads
+    // true. Reset now (decrements clamp at 0) so an interrupt reads as quiet.
+    _pendingSay = 0;
     status("(interrupted — listening)");
   }
   window.interruptSpeech = interruptSpeech;
@@ -719,11 +726,19 @@
     // answers. True = heartbeat while anything is playing or queued (the
     // backend extends the window a beat past the next report); one false on
     // the transition closes the window the moment she actually goes quiet.
+    // The false transition used to be reported exactly ONCE, fire-and-forget —
+    // lose that single POST and the backend's barge-in window stays open,
+    // reading every later human line as talking over her (observed: four
+    // addressed turns died after one long answer). Re-send `false` for a few
+    // intervals after the transition so one dropped request can't wedge it.
     let reportedSpeaking = false;
+    let falseRepeats = 0;
     setInterval(() => {
       const speaking =
         _pendingSay > 0 || !!head.isSpeaking || performance.now() < speakingUntil;
-      if (!speaking && !reportedSpeaking) return; // idle→idle: nothing to report
+      if (speaking) falseRepeats = 4;
+      else if (!reportedSpeaking && falseRepeats <= 0) return; // idle→idle
+      else falseRepeats--;
       reportedSpeaking = speaking;
       fetch(`/avatar/speaking/${encodeURIComponent(conversationId)}`, {
         method: "POST",

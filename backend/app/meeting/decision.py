@@ -142,8 +142,18 @@ def fuzzy_name_match(token: str, name: str) -> bool:
         return True
     if token in _FUZZY_EXCLUDE:
         return False
-    if len(token) < 3 or len(name) < 4 or not _initials_equivalent(token[0], name[0]):
+    if len(token) < 3 or len(name) < 4:
         return False
+    if not _initials_equivalent(token[0], name[0]):
+        # ASR also corrupts the INITIAL consonant ("Hedrik" for "Sedrik" —
+        # observed in a real meeting, four dead turns). For long-enough names,
+        # a single edit anywhere is still unmistakably the avatar's name, so
+        # distance ≤1 may cross the initial gate; distance 2 never does
+        # ("clara" vs "laura" stays blocked). A token that IS a real
+        # participant's name is suppressed upstream via `excluded`.
+        if len(name) < 6:
+            return False
+        return _levenshtein(token, name) <= 1
     d = _levenshtein(token, name)
     if d <= 1:
         return True

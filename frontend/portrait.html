@@ -142,10 +142,13 @@
     return await ctx().decodeAudioData(bin.buffer);
   }
   async function synthesize(text) {
+    // 15s abort: a hung /tts must not pin the pending counter (and with it
+    // the speaking heartbeat) forever — same lesson as /talk.
     const r = await fetch("/tts", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text, avatar_id: avatarId }),
+      signal: AbortSignal.timeout(15000),
     });
     if (!r.ok) throw new Error("/tts unavailable (" + r.status + ")");
     const j = await r.json();
@@ -166,6 +169,9 @@
     _gen++;
     _chain = Promise.resolve();
     if (_source) { try { _source.stop(); } catch (_) {} _source = null; }
+    // Dropped chain's finally blocks still decrement later (clamped at 0);
+    // reset now so the speaking heartbeat reads quiet immediately.
+    _pending = 0;
     setSpeaking(false);
     caption.classList.remove("show");
   }
@@ -245,11 +251,16 @@
     };
     poll();
 
-    // Report the REAL speaking state (backend barge-in window).
+    // Report the REAL speaking state (backend barge-in window). The false
+    // transition is re-sent a few times so one dropped POST can't leave the
+    // backend thinking she's still talking — same lesson as /talk.
     let reported = false;
+    let falseRepeats = 0;
     setInterval(() => {
       const speaking = _pending > 0 || !!_source;
-      if (!speaking && !reported) return;
+      if (speaking) falseRepeats = 4;
+      else if (!reported && falseRepeats <= 0) return;
+      else falseRepeats--;
       reported = speaking;
       fetch(`/avatar/speaking/${encodeURIComponent(conversationId)}`, {
         method: "POST",

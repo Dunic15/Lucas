@@ -788,7 +788,9 @@ def list_calendar_events(
 
 _BRIEF_TTL = 180.0
 _BRIEF_MAX_EVENTS = 8
-_BRIEF_MAX_CHARS = 900
+# 1400 (was 900): guest lines now carry `Name <email>` so the avatar can
+# answer "what's X's email?" from context — the longer lines need headroom.
+_BRIEF_MAX_CHARS = 1400
 _brief_cache: dict[str, tuple[float, str]] = {}
 
 
@@ -815,12 +817,20 @@ def _event_line(item: dict) -> str:
             when = raw_start
     elif start.get("date"):
         when = f"{start['date']} (all day)"
-    guests = [
-        str(a.get("displayName") or a.get("email") or "").split("@")[0]
-        for a in (item.get("attendees") or [])
-        if isinstance(a, dict) and not a.get("self") and not a.get("resource")
-    ]
-    guests = [g for g in guests if g]
+    # Keep the email: `Name <email>` (or the bare address). Stripping the
+    # domain here once made the avatar refuse a "what's X's email?" that the
+    # room could see it had just listed — the brief is the ONLY calendar data
+    # the avatar ever sees, so what's dropped here is unanswerable.
+    guests = []
+    for a in item.get("attendees") or []:
+        if not isinstance(a, dict) or a.get("self") or a.get("resource"):
+            continue
+        name = str(a.get("displayName") or "").strip()
+        email = str(a.get("email") or "").strip()
+        if name and email:
+            guests.append(f"{name} <{email}>")
+        elif email or name:
+            guests.append(email or name)
     extra = ""
     if guests:
         shown = ", ".join(guests[:3])

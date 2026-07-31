@@ -503,9 +503,18 @@ def _stream_groq(
             if data == "[DONE]":
                 break
             try:
-                delta = _json.loads(data)["choices"][0]["delta"].get("content")
+                choice = _json.loads(data)["choices"][0]
             except (KeyError, IndexError, ValueError):
                 continue
+            # A "length" stop means the answer was CUT at max_tokens — that
+            # was invisible here once, and a truncated spoken answer looked
+            # like a model bug. Counts only, never content.
+            if choice.get("finish_reason") == "length":
+                print(
+                    f"[brain] {provider} stream hit max_tokens={max_tokens} "
+                    "(answer truncated)", flush=True,
+                )
+            delta = (choice.get("delta") or {}).get("content")
             if delta:
                 yield delta
 

@@ -271,6 +271,10 @@ def test_create_bot_can_use_deepgram_streaming_transcription(monkeypatch):
     )
 
     provider = captured["json"]["recording_config"]["transcript"]["provider"]
+    # keyterm: nova-3 keyterm prompting biases the ASR toward the avatar's
+    # name (its garbling cost real wake-ups) + ASR_KEYTERMS (2026-07-31).
     assert provider == {
-        "deepgram_streaming": {"model": "nova-3", "language": "multi"}
+        "deepgram_streaming": {
+            "model": "nova-3", "language": "multi", "keyterm": ["Laura"],
+        }
     }

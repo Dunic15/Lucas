@@ -280,7 +280,7 @@ FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 REPO_ROOT_DIR = Path(__file__).resolve().parents[2]
 from app.api.deps import EMAIL_RE, _split_emails, _calendar_target_emails, _line_for, _gmail_state  # noqa: E402
 from .meeting.lifecycle import (  # noqa: E402  (hoisted lifecycle core; re-import = compat)
-    _start_avatar_session, _finalize_session, _finalize_session_locked,
+    _start_avatar_session, _finalize_session, _finalize_session_locked, refresh_session_brief,
     _close_usage_for, _assign_usage_bot_id, _leave_confirmed_stopped, _retry_leave,
     _bot_reports_terminal, _recall_list_headers, _bot_status_code, _bot_meeting_key,
     _bot_variant_rank, _avatar_asana_enabled, _merge_action_items, _stamp_action_routing,
@@ -1779,7 +1779,19 @@ async def _make_avatar_speak(
     est = max(1.0, len(text.split()) / _SPEECH_WORDS_PER_SECOND)
     if audio and audio.get("wtimes") and audio.get("wdurations"):
         est = max(1.0, (audio["wtimes"][-1] + audio["wdurations"][-1]) / 1000 + 0.3)
-    session.speaking_until = max(session.speaking_until, time.time()) + est
+    # Hard cap: a long queued answer once pushed this window tens of seconds
+    # out, and when the page's single speaking:false report was lost, every
+    # later human line read as a barge-in and killed its own answer — four
+    # addressed turns died silently. 45s covers any real queued answer; the
+    # page's speaking reports keep it honest within that.
+    session.speaking_until = min(
+        max(session.speaking_until, time.time()) + est, time.time() + 45.0
+    )
+    # A spoken line that ends with a question ARMS the awaiting-reply window:
+    # the next human line (within the window) counts as addressed even in
+    # address-only group mode — she asked, they're answering.
+    if not backchannel and settings.awaiting_reply_seconds > 0 and text.rstrip().endswith("?"):
+        session.awaiting_reply_until = time.time() + settings.awaiting_reply_seconds
     if session.ws is not None:
         try:
             await session.ws.send_json(message)
@@ -2081,7 +2093,17 @@ def _is_echo(session: store.Session, text: str) -> bool:
     recent = [
         spoken for spoken, ts in session._recent_lines.items() if now - ts < 45.0
     ]
-    if any(norm in spoken for spoken in recent):
+    # Substring alone over-matches on LONG spoken lines: a human's short
+    # verbatim reply to her own question ("send the recap to the whole team")
+    # sits inside her answer and was swallowed — the line never reached the
+    # transcript or wake detection. Echo needs the heard line to be a
+    # substantial chunk of what she said: ≥8 words, or ≥50% of the matched
+    # spoken line's length.
+    words_n = len(norm.split())
+    if any(
+        norm in spoken and (words_n >= 8 or len(norm) >= 0.5 * len(spoken))
+        for spoken in recent
+    ):
         return True
     # A Gemini-ears turn is ANOTHER model's transcription of her voice: the
     # wording/segmentation drifts from what she spoke, and one aggregated turn
@@ -3088,10 +3110,17 @@ async def recall_webhook(request: Request) -> JSONResponse:
 
     # Cross-meeting memory: lazily (re)load after a process restart, scoped to
     # this session's org (never another tenant's open items in the live prompt).
-    # KNOWN GAP: only the carryover + week blocks are recomposed here — the
-    # Drive/Asana/calendar blocks from session start are lost on an instance
-    # replacement (pre-existing; they need their own cached re-derivation).
+    # THIS turn gets the fast, hard-bounded carryover+week rebuild (live path:
+    # cached reads only); the FULL brief — Drive/Asana/calendar/tools, the
+    # blocks whose silent loss once made the avatar deny capabilities it had
+    # claimed earlier in the same call — is recomposed in the background and
+    # lands for the next turn.
     if session.memory_brief is None:
+        asyncio.create_task(
+            refresh_session_brief(
+                session, avatar, session.meeting_url, session.org_id
+            )
+        )
         rebuilt = await run_in_threadpool(
             ledger.carryover_brief, session.meeting_url, org_id=session.org_id
         )
@@ -3117,7 +3146,10 @@ async def recall_webhook(request: Request) -> JSONResponse:
                 f"distilled from past meetings with dates]\n{week}\n\n"
                 + (rebuilt or "")
             )
-        session.memory_brief = rebuilt
+        # Don't clobber the background full recompose if it already landed
+        # (all-cached case): the thin rebuild is strictly a subset.
+        if session.memory_brief is None:
+            session.memory_brief = rebuilt
     memory = session.memory_brief or ""
     memory = cedric.inject_brief(session, memory)  # CEDRIC: brief ahead of carryover
 
@@ -3599,12 +3631,27 @@ async def recall_webhook(request: Request) -> JSONResponse:
     roster = session.roster(avatar.name)
     if not called and addressed_to_other(text, roster):
         return JSONResponse({"ok": True, "spoke": False, "reason": "addressed to other"})
+    # ── awaiting-reply ──
+    # SHE just asked the room a question ("what time works for you?") — the
+    # next human line is the answer she asked for, name or no name. Consumed
+    # on use: one reply per question, so this is never a standing bypass and
+    # the never-speak-over-anyone rule holds. (A real meeting required saying
+    # "Cedric" to answer his own question, every single turn.)
+    awaiting_reply = (
+        not called
+        and settings.awaiting_reply_seconds > 0
+        and time.time() < session.awaiting_reply_until
+    )
+    if awaiting_reply:
+        session.awaiting_reply_until = 0.0
     # ── address-only group mode ──
     # Owner rule (2026-07-29): with several humans in the room, ONLY a direct
     # address gets speech — no follow-up window, no deference answers, no
     # hand-raise/interjection. Placed BEFORE the followup computation so the
     # engaged-follow-up bypass is dead in group rooms (name required always).
-    if not called and _address_only_active(session, avatar):
+    # The awaiting-reply window is the one deliberate exception: answering
+    # her own question is being addressed, just implicitly.
+    if not called and not awaiting_reply and _address_only_active(session, avatar):
         return JSONResponse(
             {"ok": True, "spoke": False, "reason": "not addressed (group)"}
         )
@@ -3614,7 +3661,7 @@ async def recall_webhook(request: Request) -> JSONResponse:
     # about the deadline?"). Dialogue context is a first-class addressee
     # signal (research doc), so it bypasses the cooldown and the deference
     # wait below. The in-stream SKIP gate still protects the misfires.
-    followup = (
+    followup = awaiting_reply or (
         not called
         and settings.followup_window_seconds > 0
         and (time.time() - session.last_spoke_at) < settings.followup_window_seconds
@@ -3808,6 +3855,20 @@ async def recall_webhook(request: Request) -> JSONResponse:
             gate=settings.speak_silence_gate_called_seconds,
             audio=tts.cached_payload(line, _avatar_voice(session)),
         )
+        # Written receipt in the meeting chat: the captured item VERBATIM, so
+        # the room can eyeball a mis-heard time/name and correct it while the
+        # meeting is still on (a spoken 5 PM was once confirmed back as 3 PM
+        # and nobody could see what was actually captured). Best-effort,
+        # detached — never blocks the live path.
+        captured_text = str(item.get("action") or "").strip()
+        if captured_text:
+            asyncio.create_task(
+                run_in_threadpool(
+                    _post_to_meeting_chat,
+                    session,
+                    f'Queued for approval: "{captured_text}"',
+                )
+            )
         return JSONResponse({"ok": True, "spoke": bool(spoke), "action_capture": True})
 
     # ── instant acknowledgment ──
@@ -4190,6 +4251,16 @@ async def recall_webhook(request: Request) -> JSONResponse:
         # The turn died mid-answer — report it honestly and skip the repair
         # line (a human is talking; silence is correct). Any still-pending
         # speak tasks drop themselves via the generation check.
+        if called and not spoke_any:
+            # An ADDRESSED question that produced zero speech used to leave no
+            # trace — four such turns died in a row in a real meeting before
+            # anyone could tell why. Counts/flags only, never content.
+            print(
+                f"[live] called turn interrupted before speaking "
+                f"(gen {turn_gen}->{session.speech_generation}, "
+                f"speaking_until in {session.speaking_until - time.time():.1f}s)",
+                flush=True,
+            )
         return JSONResponse({"ok": True, "spoke": spoke_any, "interrupted": True})
 
     if not spoke_any:

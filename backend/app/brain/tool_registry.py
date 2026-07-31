@@ -169,9 +169,14 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
             pass
 
         # Knowledge sources (what it can READ — RAG + the Drive brief).
+        # `drive_folder` (did the brief actually LOAD) is overridden by the
+        # session-start composer from the real fetch outcome — config presence
+        # alone once made the avatar claim Drive access it didn't hold.
         reg["knowledge"] = {
             "docs": True,  # every avatar has an indexed knowledge folder
-            "drive_folder": bool(getattr(avatar, "drive_folder_id", "")),
+            "drive_folder_configured": bool(getattr(avatar, "drive_folder_id", "")),
+            "drive_folder": False,
+            "calendar": False,
         }
         return reg
     except Exception:  # noqa: BLE001 — never block a join over the registry
@@ -220,11 +225,19 @@ def brief(reg: dict | None) -> str:
                 "NOT connected (never promise these): " + ", ".join(available) + "."
             )
     know = reg.get("knowledge") or {}
-    lines.append(
-        "You can read: your indexed process docs"
-        + ("; the shared Drive folder brief" if know.get("drive_folder") else "")
-        + "."
-    )
+    read = "You can read: your indexed process docs"
+    if know.get("drive_folder"):
+        read += "; the shared Drive folder brief (in your context)"
+    elif know.get("drive_folder_configured"):
+        # Configured but the fetch came back empty: claiming it anyway made
+        # the avatar assert Drive access, then deny it two turns later.
+        read += (
+            "; NOTE: the shared Drive folder did not load this session — "
+            "if asked, say you don't have the Drive docs right now"
+        )
+    if know.get("calendar"):
+        read += "; the owner's upcoming calendar (in your context)"
+    lines.append(read + ".")
     lines.append(
         "Honesty: actions are CAPTURED then approved after the call — say "
         "\"queued for approval\", never claim something was already done."

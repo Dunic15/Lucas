@@ -186,9 +186,13 @@ Claude in a meeting: direct, concrete, genuinely useful — and a company/fund \
 expert only when the question touches the provided documents. Default to 1-2 \
 punchy sentences (3 max); never restate the question, never open with filler \
 like "great question". Plain text only — no markdown, bullets, headings, \
-JSON, or preamble. NEVER mention documents, context, knowledge bases, or what \
-you do or don't "have access to" unless you are actually citing a company \
-document in this answer.
+JSON, or preamble. Never VOLUNTEER meta-commentary about documents, context, \
+knowledge bases, or what you do or don't "have access to" — but when someone \
+directly asks what you can see or do, answer honestly from the "YOUR TOOLS" \
+section of your context: name only what it lists as available, and say plainly \
+when something isn't. Never claim access you can't demonstrate in this \
+conversation, and never deny access to information that is sitting in your \
+context.
 
 How to respond:
 - General questions (world knowledge, advice, explanations, opinions, news, \
@@ -203,7 +207,17 @@ it, give the useful part and say what you'd check.
 - If you were given web search results or used search, answer from them and \
 mention it's from a quick search.
 - Live transcripts are noisy — infer the likely intent and answer what the \
-person most likely meant.
+person most likely meant. When the transcript garbles a name that appears \
+correctly in your context (a participant, the team, a product), use the \
+correct spelling from your context, not the garbled one.
+- When you repeat back details someone just gave — times, dates, names, email \
+addresses, amounts — repeat them EXACTLY as said. If you didn't catch a \
+detail clearly, ask again instead of guessing: a wrong read-back of "five PM" \
+as "three PM" is worse than asking twice.
+- When a list in your context (calendar, tasks, documents) has more than \
+three items, don't read it all out — give the count and the two or three most \
+relevant items, then offer the rest ("you've got eight coming up, mostly the \
+weekly sync — want the full list?").
 - Reply in the language the person spoke to you in — an Italian question gets \
 an Italian answer. Follow the conversation if it switches language.
 - Meetings often have several people. When a roster and the speaker's name are \
@@ -792,7 +806,10 @@ def answer_question_stream(
         # silent.
         question = f"{question} (You could not search the web just now — answer from your knowledge and say it may not be current.)"
         _provider, _model = settings.brain_provider, settings.brain_model_fast
-    _max_tokens = 400
+    # 700 (was 400): a 400-token cap cut real answers mid-sentence (a spoken
+    # calendar summary died on "Want me" in a live meeting). The prompt still
+    # pushes 1-3 sentences; the cap is a safety net, not the target length.
+    _max_tokens = 700
     for delta in llm.stream_complete(
         system, user, max_tokens=_max_tokens, model=_model, provider=_provider
     ):
@@ -835,8 +852,27 @@ def answer_question_stream(
                 spoke_any = True
 
     # Flush whatever is left: buffered whole sentences plus any partial tail.
+    # A tail with no terminal punctuation is a mid-sentence cut (max_tokens or
+    # a dropped stream) — voicing the fragment ("… Want me") sounds broken, so
+    # trim back to the last complete sentence and drop the dangling clause.
     tail = pending.strip()
     remainder = f"{outbuf} {tail}".strip() if min_chars > 0 else tail
+    if remainder and remainder[-1] not in ".!?…":
+        cut = max(remainder.rfind(p) for p in ".!?")
+        dropped = ""
+        if cut >= 0:
+            dropped = remainder[cut + 1:].strip()
+            remainder = remainder[: cut + 1].strip()
+        elif spoke_any or len(remainder) > 80:
+            # Sentences already went out (or this is a long clause) — the
+            # unpunctuated tail is a cut, not the answer. Drop it.
+            dropped, remainder = remainder, ""
+        # else: a short unpunctuated one-liner ("Sure") IS the answer — speak it.
+        if dropped:
+            print(
+                f"[brain] dropped unterminated tail ({len(dropped)} chars) — "
+                "likely max_tokens cut", flush=True,
+            )
     if remainder and (decided or not _is_skip(remainder)):
         # A very short answer can flush only here (never set `decided` in the
         # loop) — still lead with the caveat if it applies and wasn't emitted.
