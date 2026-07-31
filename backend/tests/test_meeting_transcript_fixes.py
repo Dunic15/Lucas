@@ -152,48 +152,59 @@ def test_speaking_until_capped_and_question_arms_reply_window(
     store.remove(s.bot_id)
 
 
-# ── awaiting-reply window: answering her question needs no wake word ──
+# ── awaiting-reply window: 1:1 only; group rooms require the name ALWAYS ──
 
-def test_reply_to_her_question_answers_once_in_group(tmp_path, monkeypatch):
-    s = _session(tmp_path, monkeypatch, bot_id="fix-reply")
+def test_group_room_requires_name_even_to_answer_her_question(tmp_path, monkeypatch):
+    """Owner rule (2026-07-31): the awaiting-reply window never bypasses
+    address-only group mode — with several humans present, an unaddressed
+    reply to HER question stays silent and the window is NOT consumed."""
+    s = _session(tmp_path, monkeypatch, bot_id="fix-reply-grp")
+    _stub_stream(monkeypatch, ["I should not speak."])
+    spoken = _capture_speech(monkeypatch)
+
+    armed_until = time.time() + settings.awaiting_reply_seconds
+    s.awaiting_reply_until = armed_until
+    body = _post(_line(s.bot_id, "Ben", "the client meeting is Monday at five PM"))
+    assert body.get("spoke") is False
+    assert body.get("reason") == "not addressed (group)"
+    assert not spoken
+    assert s.awaiting_reply_until == armed_until  # not consumed by the gate
+    store.remove(s.bot_id)
+
+
+def test_one_to_one_reply_to_her_question_answers_despite_cooldown(
+    tmp_path, monkeypatch
+):
+    """1:1: she just asked, so the bare non-question reply ("Monday at five
+    PM") answers even inside the cooldown — then the window is consumed."""
+    s = _session(tmp_path, monkeypatch, bot_id="fix-reply-1to1", humans=("Ben",))
     monkeypatch.setattr(settings, "ack_enabled", False)
     _stub_stream(monkeypatch, ["Noted — five PM it is."])
     spoken = _capture_speech(monkeypatch)
 
+    s.mark_spoke()  # she JUST spoke (the question) — cooldown is active
     s.awaiting_reply_until = time.time() + settings.awaiting_reply_seconds
     body = _post(_line(s.bot_id, "Ben", "the client meeting is Monday at five PM"))
     assert body.get("spoke") is True
     assert spoken
-
-    # window consumed: the NEXT unaddressed line is silent again (group rule)
-    body2 = _post(_line(s.bot_id, "Ben", "and one more thing about the deck"))
-    assert body2.get("spoke") is False
-    assert body2.get("reason") == "not addressed (group)"
+    assert s.awaiting_reply_until == 0.0  # consumed on use
     store.remove(s.bot_id)
 
 
-def test_reply_window_never_steals_a_line_addressed_to_other(tmp_path, monkeypatch):
-    s = _session(tmp_path, monkeypatch, bot_id="fix-reply-other")
-    _stub_stream(monkeypatch, ["I should not speak."])
-    spoken = _capture_speech(monkeypatch)
-
-    s.awaiting_reply_until = time.time() + 20
-    body = _post(_line(s.bot_id, "Ben", "Marco, can you take the client meeting?"))
-    assert body.get("spoke") is False
-    assert not spoken
-    store.remove(s.bot_id)
-
-
-def test_reply_window_disabled_by_setting(tmp_path, monkeypatch):
-    s = _session(tmp_path, monkeypatch, bot_id="fix-reply-off")
+def test_one_to_one_reply_window_disabled_by_setting(tmp_path, monkeypatch):
+    """With the window disabled, the same bare reply inside the cooldown is
+    silent — pinning that the window (not something else) made it answer."""
+    s = _session(tmp_path, monkeypatch, bot_id="fix-reply-off", humans=("Ben",))
     monkeypatch.setattr(settings, "awaiting_reply_seconds", 0.0)
+    monkeypatch.setattr(settings, "ack_enabled", False)
     _stub_stream(monkeypatch, ["I should not speak."])
     _capture_speech(monkeypatch)
 
+    s.mark_spoke()
     s.awaiting_reply_until = time.time() + 20
     body = _post(_line(s.bot_id, "Ben", "Monday at five PM works"))
     assert body.get("spoke") is False
-    assert body.get("reason") == "not addressed (group)"
+    assert body.get("reason") == "cooldown"
     store.remove(s.bot_id)
 
 

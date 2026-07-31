@@ -3631,12 +3631,22 @@ async def recall_webhook(request: Request) -> JSONResponse:
     roster = session.roster(avatar.name)
     if not called and addressed_to_other(text, roster):
         return JSONResponse({"ok": True, "spoke": False, "reason": "addressed to other"})
-    # ── awaiting-reply ──
-    # SHE just asked the room a question ("what time works for you?") — the
-    # next human line is the answer she asked for, name or no name. Consumed
-    # on use: one reply per question, so this is never a standing bypass and
-    # the never-speak-over-anyone rule holds. (A real meeting required saying
-    # "Cedric" to answer his own question, every single turn.)
+    # ── address-only group mode ──
+    # Owner rule (2026-07-29, reconfirmed 2026-07-31): with several humans in
+    # the room, ONLY a direct address gets speech — no follow-up window, no
+    # deference answers, no hand-raise/interjection, and no awaiting-reply
+    # bypass either: the name is required always, even to answer a question
+    # she just asked. Placed BEFORE the followup computation so every
+    # unaddressed bypass is dead in group rooms.
+    if not called and _address_only_active(session, avatar):
+        return JSONResponse(
+            {"ok": True, "spoke": False, "reason": "not addressed (group)"}
+        )
+    # ── awaiting-reply (1:1 rooms only — group mode returned above) ──
+    # SHE just asked a question ("what time works for you?") — the next human
+    # line is the answer she asked for, even when it isn't itself a question
+    # (a bare "5 PM works" used to die to the cooldown). Consumed on use: one
+    # reply per question.
     awaiting_reply = (
         not called
         and settings.awaiting_reply_seconds > 0
@@ -3644,17 +3654,6 @@ async def recall_webhook(request: Request) -> JSONResponse:
     )
     if awaiting_reply:
         session.awaiting_reply_until = 0.0
-    # ── address-only group mode ──
-    # Owner rule (2026-07-29): with several humans in the room, ONLY a direct
-    # address gets speech — no follow-up window, no deference answers, no
-    # hand-raise/interjection. Placed BEFORE the followup computation so the
-    # engaged-follow-up bypass is dead in group rooms (name required always).
-    # The awaiting-reply window is the one deliberate exception: answering
-    # her own question is being addressed, just implicitly.
-    if not called and not awaiting_reply and _address_only_active(session, avatar):
-        return JSONResponse(
-            {"ok": True, "spoke": False, "reason": "not addressed (group)"}
-        )
     # ── engaged follow-up ──
     # She JUST spoke and someone asks a question without her name — in a live
     # conversation that's almost always a follow-up to HER answer ("and what

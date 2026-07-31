@@ -493,12 +493,13 @@ class Settings(BaseSettings):
     # cooldown and the deference wait (dialogue context is a first-class
     # addressee signal). 0 disables.
     followup_window_seconds: float = 15.0
-    # Awaiting-reply window: when SHE ends a spoken line with a question
-    # ("what time works for you?"), the next human line within this window
-    # counts as addressed — even in address-only group mode, where a real
-    # meeting once required re-saying her name to ANSWER HER OWN QUESTION.
-    # Consumed on first use (one reply per question — never a standing
-    # bypass, so the never-speak-over-anyone rule holds). 0 disables.
+    # Awaiting-reply window (1:1 rooms ONLY — owner rule 2026-07-31: group
+    # rooms require the name always, even to answer her own question): when
+    # SHE ends a spoken line with a question ("what time works for you?"),
+    # the next human line within this window counts as an engaged follow-up
+    # even without a "?" of its own — a bare "5 PM works" reply used to die
+    # to the cooldown. Consumed on first use (one reply per question).
+    # 0 disables.
     awaiting_reply_seconds: float = 20.0
     # Comma-separated names the ASR should bias toward (product/team names —
     # e.g. "Lauratar, Duccio, SFF Studio"): they otherwise arrive garbled

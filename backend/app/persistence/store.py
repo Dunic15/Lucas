@@ -99,9 +99,10 @@ class Session:
     # drives barge-in (a human talking inside this window interrupts her).
     speaking_until: float = field(default=0.0, repr=False, compare=False)
     # Until when (epoch seconds) the avatar is waiting for the room to answer
-    # a question SHE asked ("what time works for you?"). Inside this window the
-    # next human line counts as addressed even in address-only group mode —
-    # consumed on use (one reply per question). In-memory only.
+    # a question SHE asked ("what time works for you?"). 1:1 rooms only —
+    # inside this window the next human line counts as an engaged follow-up
+    # even without a "?" (group rooms always require the name; the gate
+    # returns before this is consulted). Consumed on use. In-memory only.
     awaiting_reply_until: float = field(default=0.0, repr=False, compare=False)
     # Monotonic speech-turn counter. Every stop (barge-in) and every new answer
     # turn bumps it; speak messages are stamped with the generation they belong
