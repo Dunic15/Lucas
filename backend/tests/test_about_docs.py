@@ -76,4 +76,13 @@ def test_retrieve_for_routes_by_intent():
     process_hits = brain._retrieve_for(laura, "what accounts does a new hire need?", "", 4)
     assert any("laura" in h.source or "playbook" in h.source or "runbook" in h.source
                or "architecture" in h.source or "provider" in h.source for h in about_hits)
-    assert all(h.source in {"onboarding_sop.md", "access_security_sop.md"} for h in process_hits)
+    # Laura's knowledge pack: the original SOPs + the PM-focus SOPs (2026-07-31).
+    # The intent under test is unchanged: process questions hit knowledge/
+    # docs, never the about/ pack.
+    assert all(
+        h.source in {
+            "onboarding_sop.md", "access_security_sop.md",
+            "pm_action_item_sop.md", "pm_meeting_cadence_sop.md",
+        }
+        for h in process_hits
+    )

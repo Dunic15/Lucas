@@ -75,8 +75,10 @@ def test_specific_missing_portrait_is_explicitly_unavailable():
 def test_customer_avatars_publish_explicit_renderer_readiness():
     laura = avatars.load("laura").renderer_readiness
     cedric = avatars.load("cedric").renderer_readiness
-    assert laura["preferred"] == "photoreal"
-    assert laura["fallback"] == "talk"
+    # 2026-07-31 owner decision: Laura renders like Cedric — talk-first,
+    # photoreal fallback (identity-safe assets unchanged).
+    assert laura["preferred"] == "talk"
+    assert laura["fallback"] == "photoreal"
     assert laura["photoreal"]["asset"] == "reference-laura.jpg"
     assert laura["talk"]["asset"] == "laura.glb"
     assert cedric["preferred"] == "talk"

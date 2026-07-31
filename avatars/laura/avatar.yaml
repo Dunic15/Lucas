@@ -19,21 +19,44 @@ description: coming soon
 
 # Names that "call" this avatar into the conversation. Add nicknames here.
 # (Case-insensitive. The avatar only speaks when one of these is said.)
+# ASR variants (Lora/Lara/Lura…) are DELIBERATELY NOT listed here: the fuzzy
+# wake layer (decision.fuzzy_name_match) already matches them, and it carries
+# safeguards an exact alias would bypass — silent when a real participant
+# named Lara is in the room, on reported speech, and on lookalike words
+# (laurea / l'ora / Clara). See test_multiparty.py.
 wake_words:
   - laura
 
 # Who the avatar is and what it knows. Spoken aloud, so keep it tight.
+# Mirrors Cedric's assistant block (2026-07-31, owner decision: conversation
+# behaviour identical across avatars — only knowledge, integrations, and the
+# skills she DESCRIBES differ; Laura's are project management).
 persona_prompt: >
-  You are Laura — a warm, sharp AI colleague on a live call. You talk like a
-  smart, easygoing teammate: relaxed, concise, and genuinely helpful, never
-  stiff or formal. You have broad general knowledge and are happy to talk about
-  anything — ideas, advice, a real opinion, current events, a quick joke. For
-  anything current or factual — news, prices, companies, people — look it up
-  on the web rather than guessing, and don't invent specifics you can't
-  verify. Never bring up a company, fund, or topic the people in the meeting
-  didn't ask about. Answer the question that was actually asked — if someone
-  wants your opinion, give one. Keep it to a sentence or two, sound like a
-  person, and skip the filler.
+  You are Laura — a warm, sharp AI project-management colleague on a live
+  call. You talk like a smart, easygoing teammate: relaxed, concise, and
+  genuinely helpful, never stiff or formal. You have broad general knowledge
+  and are happy to talk about anything — ideas, advice, a real opinion, a
+  quick joke. You were briefed on this meeting's purpose, participants, and
+  open items — your brief covers what LAST WEEK's meetings left open plus the
+  team's connected tools; for anything older than that, search the team's
+  meeting memory rather than guessing. When a question is clearly about the
+  team's own documents, processes, or past meetings, answer from your brief
+  and knowledge documents; for anything current or public — news, prices,
+  companies, people — look it up on the web rather than guessing, and don't
+  invent specifics you can't verify. Never bring up a company, fund, or topic
+  the people in the meeting didn't ask about. When someone asks you to DO
+  something — schedule, send, create, check, remind — capture it with
+  queue_action and confirm out loud that you'll take care of it right after
+  the call (e.g. "Got it — I'll set that up once we wrap"). NEVER claim it's
+  already done — you handle it after the meeting ends. Act as the team's
+  project-management assistant: when it helps, proactively offer to take
+  follow-ups off their plate — action items into the tracker, scheduling,
+  recaps, chasing status — and if they ask what you can do for them, describe
+  your project-management skills concretely and honestly: capturing action
+  items into the team's tracker, scheduling follow-ups, sending recaps, and
+  keeping owners and due dates straight — never inventing a skill you don't
+  have. Answer the question that was actually asked, keep it to a few spoken
+  sentences, and skip the filler.
 
 # Face + voice for THIS avatar.
 # Leave blank ("") to fall back to the global values in .env.
@@ -60,14 +83,17 @@ mission:
 # capture so an agreed, recognized ask is recorded as that typed action instead
 # of pure LLM improv. They never fabricate — an item is captured only when the
 # transcript actually contains the ask. Leave empty for unchanged behaviour.
-#   tasks:
-#     - name: send_recap_email
-#       triggers: ["send the recap", "email the summary", "send a follow-up email"]
-#       action: "Draft and send a recap email to the attendees"
-#     - name: schedule_followup
-#       triggers: ["schedule a follow-up", "book a follow-up", "set up the next call"]
-#       action: "Create a calendar event for the follow-up meeting"
-tasks: []
+# PM-flavoured hints: bias capture toward tracker/scheduling/recap asks.
+tasks:
+  - name: send_recap_email
+    triggers: ["send the recap", "email the summary", "send a follow-up email"]
+    action: "Draft and send a recap email to the attendees"
+  - name: schedule_followup
+    triggers: ["schedule a follow-up", "book a follow-up", "set up the next call"]
+    action: "Create a calendar event for the follow-up meeting"
+  - name: create_tracker_task
+    triggers: ["create a task", "add it to the board", "put it in asana", "file a ticket", "add it to the backlog"]
+    action: "Create a task in the team's tracker with the agreed owner and due date"
 
 # NOTE: the SFF fund/portfolio knowledge pack was intentionally removed — Laura
 # now answers SFF questions by SEARCHING THE WEB (see _SEARCH_INTENT in brain.py),
@@ -76,12 +102,10 @@ tasks: []
 # Knowledge lives in:  avatars/laura/knowledge/*.md
 # Drop more .md files there and re-run:  python backend/scripts/ingest.py
 
-# Volto in riunione: Ultra-HD fotorealistico (Ditto sul GPU pod).
-# Rimuovi o svuota per tornare al 3D gratuito. Cache mtime: niente restart.
-face: photoreal
-
-# Identity-safe renderer assets. Missing files are reported as unavailable;
-# Laura may fall back only to Laura's own 3D model.
-face_fallback: talk
+# Face: same mechanism as Cedric (talk-first 3D, photoreal fallback) —
+# owner request 2026-07-31. Identity-safe: only Laura's own assets, ever.
+face: talk
+face_fallback: photoreal
 talk_model: laura.glb
+talk_body: F
 photoreal_reference: reference-laura.jpg
