@@ -2536,33 +2536,22 @@ def _action_source(action: dict, brief: str = "") -> str:
     return "\n".join(p for p in parts if p)
 
 
-# What follows the title once the speaker moves on to describe the page's
-# CONTENT. Terminating the title on any "with" would truncate a legitimate one
-# ("a page called Sync with the vendor"), so the clause must name a content
-# noun to count. Without this the whole instruction became the page title
-# (live 2026-07-29: "OpenClow meeting work with a short meeting summary and a
-# checklist of the next three steps").
-_NOTION_CONTENT_CLAUSE = (
-    r"\s+(?:with|containing|con|contenente)\s+"
-    r"(?:a\s+|an\s+|the\s+|un[oa]?\s+|il\s+|la\s+|i\s+|le\s+)?"
-    r"(?:short\s+|brief\s+|quick\s+|breve\s+)?"
-    r"(?:meeting\s+|call\s+|riunione\s+)?"
-    r"(?:summary|recap|notes?|minutes|checklist|to-?dos?|action\s+items?"
-    r"|next\s+(?:three|3|few)\s+steps?|content|body"
-    r"|riassunto|resoconto|note|contenut\w+|passi)\b"
+_NOTION_CREATE_RE = re.compile(
+    r"(?:\b(?:create|make|add|open|draft|crea\w*|aggiung\w*)\b"
+    r".{0,45}\bnotion\b.{0,35}\b(?:page|pagina)\b"
+    r"|\bnotion\b.{0,35}\b(?:create|make|add|open|draft|crea\w*|aggiung\w*)\b"
+    r".{0,35}\b(?:page|pagina)\b"
+    r"|\b(?:create|make|add|open|draft|crea\w*|aggiung\w*)\b"
+    r".{0,35}\b(?:page|pagina)\b.{0,25}\b(?:in|on|su)\s+notion\b)",
+    re.IGNORECASE | re.DOTALL,
 )
-# The title can be separated from the page noun by the app name or a
-# preposition ("a page IN NOTION called X", "una pagina NOTION chiamata X").
-# The old adjacent-word form matched neither, so both stayed untyped.
 _NOTION_TITLE_RE = re.compile(
-    r"\b(?:page|pagina)\b[\w\s'’]{0,24}?"
-    r"\b(?:called|named|titled|entitled|intitolat[ao]|chiamat[ao])"
+    r"\b(?:page|pagina)\s+(?:called|named|titled|intitolat[ao]|chiamat[ao])"
     r"\s+(?:"
     r"(?P<quote>[\"'])(?P<quoted>.+?)(?P=quote)"
     r"|(?P<plain>.+?)(?="
     r",\s*(?:(?:and|then)\s+)*(?:add|include|put|with|populate)\b"
     r"|\s+(?:(?:and|then)\s+)+(?:add|include|put|populate)\b"
-    r"|" + _NOTION_CONTENT_CLAUSE +
     r"|[.!?]|$))",
     re.IGNORECASE | re.DOTALL,
 )
@@ -2578,18 +2567,15 @@ _NOTION_CHECKLIST_CUE = re.compile(
 
 
 def notion_create_spec(action: dict, brief: str = "") -> dict | None:
-    """Deterministically type a page-create request.
+    """Deterministically type an explicit Notion page-create request.
 
     "Summary of this meeting" describes page content, not a calendar write.
-    The intent test is ``tools.is_page_create_ask`` — the SAME predicate the
-    live classifier uses, so capture and typing cannot disagree about one
-    sentence. The title must be stated after called/named/titled; an ambiguous
-    request stays untyped and the approval form collects it.
+    The title must be stated after called/named/titled; an ambiguous request
+    remains untyped for the approval form.
     """
     item = str(action.get("item") or action.get("action") or "")
-    if not tools.is_page_create_ask(item):
+    if not _NOTION_CREATE_RE.search(item):
         return None
-    item = tools.repair_app_asr(item)
     match = _NOTION_TITLE_RE.search(item)
     if not match:
         return None

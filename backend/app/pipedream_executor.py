@@ -35,7 +35,6 @@ from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from . import ledger, pipedream_client
-from .actions import app_policy, app_registry
 from .config import settings
 
 # builder(org_id, account_id, args) -> (method, url, json_body|None, extra_headers|None)
@@ -156,23 +155,86 @@ _GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
 _CAL_API = "https://www.googleapis.com/calendar/v3"
 _DRIVE_API = "https://www.googleapis.com/drive/v3"
 _NOTION_API = "https://api.notion.com/v1"
-# One source of truth: the deterministic Notion builders below read the same
-# version header the registry hands the generic plane, so bumping the API
-# version is a one-line registry edit rather than a grep across two planes.
-_NOTION_VERSION = (
-    app_registry.spec_for("notion") or app_registry.AppSpec("notion", "Notion", frozenset())
-).default_headers().get("Notion-Version", "2026-03-11")
+_NOTION_VERSION = "2026-03-11"
 
 PROXY_ACTION_TYPE = "pipedream.proxy_request"
-# The per-app API surface (hosts, guides, required vendor headers, which POST
-# endpoints are really reads) is DATA in app/actions/app_registry.py, and the
-# read/write/allow/deny verdict is app/actions/app_policy.py. Nothing about a
-# specific vendor is decided here any more: the table below used to be a
-# hard-coded 16-app map with an `if app == "notion"` branch inside the
-# validator, and both are gone. The deterministic builders above stay
-# vendor-shaped on purpose — that is what makes them deterministic.
-_SAFE_PROXY_HEADERS = app_registry.SAFE_HEADERS
-_PROXY_METHODS = app_registry.METHODS
+_PROXY_HOSTS_BY_APP: dict[str, frozenset[str]] = {
+    "airtable": frozenset({"api.airtable.com"}),
+    "asana": frozenset({"app.asana.com"}),
+    "dropbox": frozenset({"api.dropboxapi.com", "content.dropboxapi.com"}),
+    "github": frozenset({"api.github.com"}),
+    "gmail": frozenset({"gmail.googleapis.com"}),
+    "google_calendar": frozenset({"www.googleapis.com"}),
+    "google_drive": frozenset({"www.googleapis.com"}),
+    "hubspot": frozenset({"api.hubapi.com"}),
+    "linear": frozenset({"api.linear.app"}),
+    "microsoft_teams": frozenset({"graph.microsoft.com"}),
+    "notion": frozenset({"api.notion.com"}),
+    "outlook": frozenset({"graph.microsoft.com"}),
+    "slack": frozenset({"slack.com"}),
+    "stripe": frozenset({"api.stripe.com"}),
+    "todoist": frozenset({"api.todoist.com"}),
+    "trello": frozenset({"api.trello.com"}),
+}
+_PROXY_GUIDES_BY_APP: dict[str, tuple[str, ...]] = {
+    "airtable": (
+        "List/create records: GET or POST https://api.airtable.com/v0/{baseId}/{tableIdOrName}",
+        "Update a record: PATCH https://api.airtable.com/v0/{baseId}/{tableIdOrName}/{recordId}",
+    ),
+    "asana": (
+        "List/create tasks: GET or POST https://app.asana.com/api/1.0/tasks",
+        "Update task: PUT https://app.asana.com/api/1.0/tasks/{taskGid}",
+        "Comment: POST https://app.asana.com/api/1.0/tasks/{taskGid}/stories",
+    ),
+    "github": (
+        "List/create issues: GET or POST https://api.github.com/repos/{owner}/{repo}/issues",
+        "Update issue: PATCH https://api.github.com/repos/{owner}/{repo}/issues/{number}",
+        "Create comment: POST https://api.github.com/repos/{owner}/{repo}/issues/{number}/comments",
+    ),
+    "gmail": (
+        "Search messages: GET https://gmail.googleapis.com/gmail/v1/users/me/messages?q={query}",
+        "Create draft: POST https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+        "Send MIME message: POST https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+    ),
+    "google_calendar": (
+        "List/create events: GET or POST https://www.googleapis.com/calendar/v3/calendars/primary/events",
+        "Update event: PATCH https://www.googleapis.com/calendar/v3/calendars/primary/events/{eventId}",
+    ),
+    "google_drive": (
+        "Search/create files: GET or POST https://www.googleapis.com/drive/v3/files",
+        "Update file metadata: PATCH https://www.googleapis.com/drive/v3/files/{fileId}",
+        "Share file: POST https://www.googleapis.com/drive/v3/files/{fileId}/permissions",
+    ),
+    "hubspot": (
+        "List/create CRM objects: GET or POST https://api.hubapi.com/crm/v3/objects/{objectType}",
+        "Update CRM object: PATCH https://api.hubapi.com/crm/v3/objects/{objectType}/{objectId}",
+    ),
+    "linear": (
+        "Queries and mutations: POST https://api.linear.app/graphql",
+    ),
+    "notion": (
+        "Search shared content: POST https://api.notion.com/v1/search",
+        "Create private page: POST https://api.notion.com/v1/pages with parent {type:'workspace',workspace:true}",
+        "Update page: PATCH https://api.notion.com/v1/pages/{pageId}",
+        "Append blocks: PATCH https://api.notion.com/v1/blocks/{blockId}/children",
+    ),
+    "slack": (
+        "Post message: POST https://slack.com/api/chat.postMessage",
+        "List channel history: GET https://slack.com/api/conversations.history?channel={channelId}",
+    ),
+    "todoist": (
+        "List/create tasks: GET or POST https://api.todoist.com/rest/v2/tasks",
+        "Update task: POST https://api.todoist.com/rest/v2/tasks/{taskId}",
+    ),
+    "trello": (
+        "List/create cards: GET or POST https://api.trello.com/1/cards",
+        "Update card: PUT https://api.trello.com/1/cards/{cardId}",
+    ),
+}
+_SAFE_PROXY_HEADERS = frozenset(
+    {"accept", "content-type", "notion-version", "consistencylevel"}
+)
+_PROXY_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"})
 
 
 def _emails(value: Any) -> list[str]:
@@ -825,11 +887,17 @@ def _notion_receipt(action_type: str, resp_json: dict) -> tuple:
 
 def proxy_api_hosts() -> dict[str, list[str]]:
     """Public, immutable view used to constrain OpenClaw's proxy planner."""
-    return app_registry.api_hosts()
+    return {
+        app: sorted(hosts)
+        for app, hosts in sorted(_PROXY_HOSTS_BY_APP.items())
+    }
 
 
 def proxy_api_guides() -> dict[str, list[str]]:
-    return app_registry.api_guides()
+    return {
+        app: list(guides)
+        for app, guides in sorted(_PROXY_GUIDES_BY_APP.items())
+    }
 
 
 def validate_proxy_request_args(
@@ -837,21 +905,70 @@ def validate_proxy_request_args(
     *,
     read_only: bool = False,
 ) -> tuple[str, str, str, Any, dict[str, str]]:
-    """Validate a model-proposed request before it can reach Connect Proxy.
+    """Validate a model-proposed request before it can reach Connect Proxy."""
+    values = args if isinstance(args, dict) else {}
+    app = str(values.get("app") or "").strip().lower()
+    method = str(values.get("method") or "").strip().upper()
+    url = str(values.get("url") or "").strip()
+    if app not in _PROXY_HOSTS_BY_APP:
+        raise ValueError(f"app {app!r} has no registered API host")
+    if method not in _PROXY_METHODS:
+        raise ValueError("API method must be GET, HEAD, POST, PUT, PATCH or DELETE")
+    if len(url) > 4000:
+        raise ValueError("API URL is too long")
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("API URL is invalid") from exc
+    host = str(parsed.hostname or "").lower().rstrip(".")
+    if (
+        parsed.scheme != "https"
+        or not host
+        or port not in (None, 443)
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+    ):
+        raise ValueError("API URL must be a plain HTTPS URL")
+    if host not in _PROXY_HOSTS_BY_APP[app]:
+        raise ValueError(f"{host!r} is not an approved API host for {app}")
+    if read_only and method not in {"GET", "HEAD"}:
+        notion_read = (
+            app == "notion"
+            and method == "POST"
+            and (
+                parsed.path == "/v1/search"
+                or (
+                    parsed.path.startswith("/v1/data_sources/")
+                    and parsed.path.endswith("/query")
+                )
+            )
+        )
+        if not notion_read:
+            raise ValueError("planner reads may not perform this API operation")
 
-    The parsing, the SSRF host check, the header allow-list, the vendor headers
-    and the read/write verdict all live in ``app_policy.validate_request`` now,
-    so the planner path, the workflow normaliser and the executor cannot drift
-    apart. Signature and ``ValueError`` messages are unchanged.
-    """
-    request = app_policy.validate_request(args, read_only=read_only)
-    return (
-        request.app,
-        request.method,
-        request.url,
-        request.body,
-        request.headers,
-    )
+    body = values.get("body")
+    if body is not None:
+        try:
+            encoded = json.dumps(body, separators=(",", ":"), ensure_ascii=True)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("request body must be valid JSON") from exc
+        if len(encoded.encode("utf-8")) > 64 * 1024:
+            raise ValueError("request body is too large")
+    raw_headers = values.get("headers")
+    raw_headers = raw_headers if isinstance(raw_headers, dict) else {}
+    headers: dict[str, str] = {}
+    for key, value in raw_headers.items():
+        name = str(key or "").strip()
+        if name.lower() not in _SAFE_PROXY_HEADERS:
+            raise ValueError(f"request header {name!r} is not allowed")
+        headers[name] = str(value or "")[:200]
+    if app == "notion" and not any(
+        key.lower() == "notion-version" for key in headers
+    ):
+        headers["Notion-Version"] = _NOTION_VERSION
+    return app, method, url, body, headers
 
 
 def _proxy_account(org_id: str, app: str) -> dict | None:
@@ -1205,19 +1322,6 @@ def enabled() -> bool:
 
 def action_types() -> frozenset[str]:
     return frozenset((*_MAPPER, PROXY_ACTION_TYPE))
-
-
-def types_by_app() -> dict[str, list[str]]:
-    """Deterministic action types grouped by the app slug that owns them.
-
-    The public read of ``_MAPPER`` that ``app_policy.catalog`` uses, so the
-    connected-app catalog names exactly the reliable paths this executor really
-    has — never a verb it lost, never a verb it silently gained.
-    """
-    out: dict[str, list[str]] = {}
-    for action_type, spec in _MAPPER.items():
-        out.setdefault(spec[0], []).append(action_type)
-    return {app: sorted(types) for app, types in sorted(out.items())}
 
 
 # ── connection probe (for the availability gates) ───────────────────────────

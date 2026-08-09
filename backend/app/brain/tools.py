@@ -24,7 +24,6 @@ import json
 import operator
 import re
 import uuid
-from collections.abc import Iterable
 from datetime import date, datetime
 
 # ───────────────────────────── calculator ─────────────────────────────
@@ -172,71 +171,6 @@ _KIND_TASK = re.compile(
 )
 _KIND_EMAIL = re.compile(r"\b(e-?mail\w*|gmail)\b", re.IGNORECASE)
 _KIND_NOTION = re.compile(r"\bnotion\b", re.IGNORECASE)
-
-# ── page-creation intent (live repro 2026-07-29) ────────────────────────
-# "Create a Notion page called X, add a short MEETING summary and a checklist"
-# reached the capture layer as a calendar write, and the room was asked when
-# the meeting should be. Two ways the single literal "notion" test lost:
-#   1. the ElevenLabs agent writes its OWN paraphrase into queue_action and
-#      routinely drops the app name ("Create a page called X with a short
-#      meeting summary…");
-#   2. Recall's ASR mangles it ("a nation page", "notions page").
-# In both, "meeting" — an ADJECTIVE on "summary" — was the only family cue
-# left, so the broad calendar vocabulary won. A create-verb aimed at a PAGE is
-# a document write whatever the app; the app itself is resolved from the org's
-# connected-app catalog (see ask_kind's ``connected_apps``).
-_PAGE_NOUN_ALT = r"page|pages|pagina|pagine|sub-?page|wiki"
-_PAGE_NOUN = re.compile(rf"\b(?:{_PAGE_NOUN_ALT})\b", re.IGNORECASE)
-_PAGE_CREATE = re.compile(
-    r"\b(?:create|make|add|open|draft|start|set\s+up"
-    r"|crea\w*|aggiung\w*|apri|fai)\b"
-    r"[\w\s'’,\"-]{0,30}?"
-    rf"\b(?:{_PAGE_NOUN_ALT})\b",
-    re.IGNORECASE,
-)
-# A page in Google's world is a Doc/Drive ask, which already has its own typed
-# family (drive.create_doc / drive.share_file) — never re-route those here.
-_GOOGLE_DOC_CUE = re.compile(
-    r"\b(?:google\s+doc\w*|gdoc|drive|spreadsheet|sheets?|slides?"
-    r"|presentation|foglio|presentazione)\b",
-    re.IGNORECASE,
-)
-# Context-bound ASR repair, ONLY when the mangled word is followed by the page
-# noun — so "a nation page" is repaired while "the nation" keeps its meaning.
-# Deliberately short: an unlisted mangling still classifies correctly via
-# _PAGE_CREATE (which needs no app name at all); this exists so the app-named
-# paths — _KIND_NOTION and the title regex — see the real word.
-_ASR_NOTION_PAGE = re.compile(
-    rf"\b(?:nation|nations|notions)\s+(?={_PAGE_NOUN_ALT})", re.IGNORECASE
-)
-# Connected-app slug → the ask family that app's writes belong to. Only apps
-# with a typed family live here; everything else stays free-form ("other") so a
-# connected app can never be handed a foreign family's clarify questionnaire.
-_APP_ASK_KIND: dict[str, str] = {"notion": "notion"}
-
-
-def repair_app_asr(text: str) -> str:
-    """Repair app names ASR reliably mangles, only in an unambiguous context.
-
-    Conservative and reversible: without the giveaway noun the text is returned
-    unchanged, so ordinary meeting talk never gets rewritten."""
-    return _ASR_NOTION_PAGE.sub("Notion ", text or "")
-
-
-def is_page_create_ask(text: str) -> bool:
-    """True when the ask creates a PAGE in a document app.
-
-    ONE predicate for the live classifier (``ask_kind``) and the finalize
-    typing pass (``engine.notion_create_spec``) so they can never disagree
-    about the same sentence — the split that let a page ask be captured as a
-    page write live and typed as a calendar event afterwards."""
-    t = repair_app_asr(text or "")
-    if _GOOGLE_DOC_CUE.search(t):
-        return False  # Docs/Drive have their own typed family
-    if not _PAGE_NOUN.search(t):
-        return False
-    return bool(_PAGE_CREATE.search(t) or _KIND_NOTION.search(t))
-
 _KIND_CALENDAR = re.compile(
     r"\b(meeting|riunione|call|invite|invito|appointment|appuntamento"
     r"|calendar|calendario|event[oi]?)\b",
@@ -292,24 +226,9 @@ _DETAIL_INVITE_CLOCK = re.compile(
 )
 
 
-def ask_kind(text: str, connected_apps: Iterable[str] = ()) -> str:
-    """What family was asked for: task | email | notion | calendar | other.
-
-    ``connected_apps`` is the ORG's connected-app catalog (the slugs
-    ``tool_registry.org_connected_apps`` derives from the execution plane). An
-    ask that names one of the workspace's OWN connected apps is routed to that
-    app's family before the generic vocabulary, so routing follows the
-    workspace's real connections instead of a list hardcoded here. Callers
-    without an org context (offline demo, tests) pass nothing and keep the
-    static behaviour.
-    """
-    t = repair_app_asr(text or "")
-    # The workspace's own apps first: naming a connected app is the strongest
-    # signal there is, and it must outrank the generic families below.
-    for slug in connected_apps or ():
-        kind = _APP_ASK_KIND.get(str(slug or "").strip().lower())
-        if kind and re.search(rf"\b{re.escape(str(slug))}\b", t, re.IGNORECASE):
-            return kind
+def ask_kind(text: str) -> str:
+    """What family was asked for: task | email | notion | calendar | other."""
+    t = text or ""
     if _KIND_TASK.search(t):
         return "task"
     if _KIND_EMAIL.search(t):
@@ -318,10 +237,6 @@ def ask_kind(text: str, connected_apps: Iterable[str] = ()) -> str:
     # CONTENT, not as a calendar write. App-specific intent must win before the
     # broad meeting/call calendar vocabulary.
     if _KIND_NOTION.search(t):
-        return "notion"
-    # …and so must a bare page-creation ask, which is the shape that survives
-    # the agent's paraphrase and ASR. Google Docs/Drive keep their own family.
-    if _PAGE_CREATE.search(t) and not _GOOGLE_DOC_CUE.search(t):
         return "notion"
     if _KIND_CALENDAR.search(t):
         return "calendar"

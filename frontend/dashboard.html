@@ -1644,20 +1644,6 @@
   function loadOpenClaw(){
     OC_CHAT_HISTORY=OC_CHAT_HISTORY||[];
     renderOpenClawMeetings();
-    // The chat request can complete before /dashboard/summary. Repaint the
-    // meeting labels and restore the thread's selected meeting once DATA
-    // arrives instead of leaving a generic "Meeting chat" after reload.
-    renderOpenClawThreads();
-    var activeThread=OC_CHAT_THREADS.find(function(item){
-      return item.thread_id===OC_CHAT_THREAD_ID;
-    });
-    if(activeThread){
-      updateOpenClawChatHeader(activeThread);
-      var meeting=$("#oc-meeting");
-      if(meeting&&Array.from(meeting.options).some(function(option){
-        return option.value===activeThread.meeting_id;
-      })) meeting.value=activeThread.meeting_id||"";
-    }
     if(!OC_CHAT_READY){
       OC_CHAT_READY=true;
       refreshOpenClawThreads().catch(function(error){
@@ -4443,19 +4429,49 @@
     var desc=a.description?esc(a.description):('Connect '+nm+' through Pipedream Connect — managed OAuth.');
     return '<div class="conn"><div class="nm">'+img+nm+' <span class="stchip" style="margin-left:6px">via Pipedream</span></div>'+
       '<div class="ds">'+desc+'</div>'+
-      // What Laura can run against this tool, derived from the execution plane.
-      // Only real capabilities render here; the plan-gated Pipedream component
-      // catalog is intentionally not exposed in the product.
+      // What LAURA can run against this tool, from the executor's own mapper
+      // (#377) — distinct from the "What can I do?" button below, which lists
+      // Pipedream's pre-built component catalog. Only the families the executor
+      // maps render a line here; everything else stays silent rather than
+      // claiming a capability that would dead-end.
       capVerbsHtml(a.slug)+
       '<div class="foot"><span class="cstat'+(on?" on":"")+'"><b></b>'+(on?("Connected"+acctName):"Not connected")+'</span>'+
       '<a class="btn'+(on?"":" primary")+'" style="text-decoration:none" href="/dashboard/pipedream/connect?app='+slug+'">'+(on?"Reconnect":"Connect")+'</a>'+
       (on?('<button class="btn pd-disc" data-app="'+slug+'" style="margin-left:6px">Disconnect</button>'):'')+
-      '</div></div>';
+      '</div>'+
+      // "What can I do?" — the app's pre-built Pipedream actions (connected only).
+      (on?('<div class="pd-acts" style="margin-top:8px"><button class="btn pd-acts-btn" data-actapp="'+slug+'" style="padding:5px 11px;font-size:.75rem">What can I do? ▾</button><div class="pd-acts-out" style="display:none;margin-top:7px;font-size:.76rem;color:var(--dim);line-height:1.5"></div></div>'):'')+
+      '</div>';
   }
   function _pdBind(scope){
     (scope||document).querySelectorAll('.pd-disc').forEach(function(b){
       if(b._pdb) return; b._pdb=1;
       b.addEventListener('click',function(){ _pdDisc(b.getAttribute('data-app'),b); });
+    });
+    (scope||document).querySelectorAll('.pd-acts-btn').forEach(function(b){
+      if(b._pda) return; b._pda=1;
+      b.addEventListener('click',function(){
+        var app=b.getAttribute('data-actapp');
+        var out=b.parentNode.querySelector('.pd-acts-out');
+        if(out.style.display!=='none'){ out.style.display='none'; b.textContent='What can I do? ▾'; return; }
+        out.style.display='block';
+        if(out.getAttribute('data-loaded')==='1'){ b.textContent='What can I do? ▴'; return; }
+        b.textContent='Loading…';
+        fetch('/dashboard/pipedream/actions?app='+encodeURIComponent(app),{headers:headers(),cache:'no-store'})
+          .then(function(r){ return r.json().catch(function(){return {};}); })
+          .then(function(j){
+            var acts=(j&&j.actions)||[];
+            b.textContent='What can I do? ▴'; out.setAttribute('data-loaded','1');
+            if(!acts.length){
+              out.innerHTML = (j&&j.plan_gated)
+                ? '<span style="color:var(--faint)">Pre-built actions need Pipedream’s tool-calling tier (this account’s plan covers connections + proxy execution — core Asana, Gmail &amp; Calendar actions work regardless).</span>'
+                : '<span style="color:var(--faint)">No pre-built actions listed for this app — I can still read it and, with a skill, act on it.</span>';
+              return;
+            }
+            out.innerHTML='<div style="margin-bottom:4px;color:var(--faint)">Pipedream actions available for '+esc(app)+' (top '+Math.min(acts.length,8)+' of '+acts.length+'):</div>'+acts.slice(0,8).map(function(a){ return '• '+esc(a.name); }).join('<br>');
+          })
+          .catch(function(){ out.textContent='Could not load actions.'; b.textContent='What can I do? ▾'; out.style.display='none'; });
+      });
     });
   }
   function _pdSearch(q,after,append){

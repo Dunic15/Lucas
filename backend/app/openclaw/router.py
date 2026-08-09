@@ -294,6 +294,22 @@ async def dashboard_openclaw_workflow_start(request: Request) -> JSONResponse:
     )
 
 
+def _http_status(result: dict) -> int:
+    """HTTP code for a runtime result — only an INTEGER ``status`` is one.
+
+    ``run_tool`` overloads ``status``: on a refusal it is an HTTP code (401,
+    403, 409), on a completed call it is the ACTION status ("done",
+    "needs_attention", "running"...). Popping and int()-ing it blindly turned
+    every successful tool call into a 500 (``int("done")`` raises). An action
+    status stays in the body, where the gateway reads it.
+    """
+    raw = result.get("status", 200)
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return 200
+    result.pop("status", None)
+    return raw or 200
+
+
 @router.post("/openclaw/tools/{tool_name}")
 async def openclaw_tool(tool_name: str, request: Request) -> JSONResponse:
     try:
@@ -303,8 +319,9 @@ async def openclaw_tool(tool_name: str, request: Request) -> JSONResponse:
     result = await run_in_threadpool(
         runtime.run_tool, _auth_header(request), tool_name, body if isinstance(body, dict) else {}
     )
-    status = int(result.pop("status", 200) or 200)
-    return JSONResponse(result, status_code=status, headers=_NO_STORE)
+    return JSONResponse(
+        result, status_code=_http_status(result), headers=_NO_STORE
+    )
 
 
 @router.post("/openclaw/runs/{run_id}/events")
@@ -317,5 +334,6 @@ async def openclaw_event(run_id: str, request: Request) -> JSONResponse:
     result = await run_in_threadpool(
         runtime.record_gateway_event, _auth_header(request), {**body, "run_id": run_id}
     )
-    status = int(result.pop("status", 200) or 200)
-    return JSONResponse(result, status_code=status, headers=_NO_STORE)
+    return JSONResponse(
+        result, status_code=_http_status(result), headers=_NO_STORE
+    )

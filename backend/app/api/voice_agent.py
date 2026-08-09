@@ -76,39 +76,6 @@ def _session_for_capability(capability: str):
     return store.get(bot_id)
 
 
-def _connected_apps_context(session) -> dict:
-    """The org's connected apps as ``{app: [verbs]}`` for the meeting prompt.
-
-    Read from the registry assembled ONCE at join (``session.tool_registry``),
-    so this adds no network call to bootstrap. Includes the apps connected for
-    the workspace but NOT enabled for this avatar, marked as such: denying that
-    an app exists is the failure mode this is here to prevent, and "connected
-    but not switched on for me" is the honest version of "no".
-    """
-    reg = getattr(session, "tool_registry", None)
-    if not isinstance(reg, dict):
-        return {}
-    out: dict[str, list[str]] = {}
-    for entry in reg.get("native") or []:
-        if not isinstance(entry, dict) or not entry.get("connected"):
-            continue
-        name = str(entry.get("name") or "")
-        verbs = entry.get("verbs")
-        if isinstance(verbs, str):
-            verbs = [v.strip() for v in verbs.split(",") if v.strip()]
-        if name:
-            out[name] = [str(v) for v in (verbs or [])][:6]
-    for app in reg.get("pd_apps") or []:
-        slug = str((app or {}).get("slug") or "")
-        if slug:
-            out[slug] = [str(a) for a in ((app or {}).get("actions") or [])][:6]
-    for slug in reg.get("pd_org_available") or []:
-        slug = str(slug or "")
-        if slug and slug not in out:
-            out[slug] = ["connected for this workspace, not enabled for you"]
-    return out
-
-
 def build_init_payload(session, avatar) -> dict:
     """conversation_initiation_client_data for THIS meeting.
 
@@ -159,13 +126,6 @@ def build_init_payload(session, avatar) -> dict:
     if board:
         context["asana_board_at_meeting_start"] = board[:2400]
 
-    # THE CONNECTED-APP CATALOG. Without it the agent answered capability
-    # questions from its persona's memory and told a room whose Notion is
-    # connected that Notion was not connected (live 2026-07-29). This is the
-    # join-cached registry — no network on the bootstrap path — and it carries
-    # app names and verbs only: no accounts, no tokens, no transcripts.
-    context["connected_apps"] = _connected_apps_context(session)
-
     prompt = "\n".join(
         [
             persona,
@@ -195,28 +155,17 @@ def build_init_payload(session, avatar) -> dict:
             '- Never take a bare "yes"/"okay"/"va bene" as approval of any action.',
             "",
             "YOUR TOOLS (they call the meeting platform — use them, never invent):",
-            "- WHAT THIS WORKSPACE HAS CONNECTED is the `connected_apps` map in",
-            "  the meeting data below — that map is the ONLY truth about",
-            "  connections. NEVER SAY AN APP IS NOT CONNECTED unless it is",
-            "  absent from it; your persona and your knowledge documents do not",
-            "  know this workspace's connections. If an app IS listed, say you",
-            "  can prepare the action for it. If it is listed as connected but",
-            "  not enabled for you, say exactly that. If it is absent, say it",
-            "  isn't connected here and offer to capture the ask anyway.",
-            "- Asked to DO something (schedule, send, create, invite, remind,",
-            "  write a page or a doc): call queue_action with a clear summary",
-            "  and EVERY specific given — including the app's name when they",
-            "  named one, so the action is filed against the right tool.",
+            "- Asked to DO something (schedule, send, create, invite, remind):",
+            "  call queue_action with a clear summary and EVERY specific given.",
             "  For an EXPLICIT write request, call queue_action IMMEDIATELY.",
             "  Do NOT call get_available_actions first and do not refuse from",
             "  memory. A missing live snapshot never blocks queueing; the",
             "  approval/execution layer checks the current app connection.",
-            "  Actions are NEVER executed directly — you PREPARE them and they",
-            "  go to the approval dashboard and run ONCE APPROVED. Confirm out",
-            '  loud accordingly ("Got it — I\'ve prepared it; it\'s in the',
-            '  approval queue and runs as soon as you approve it.") NEVER say',
-            "  it is done, created, scheduled or sent, and never say \"after the",
-            '  meeting" or "once we wrap".',
+            "  Actions are NEVER executed directly — they go to the approval",
+            "  dashboard and run ONCE APPROVED. Confirm out loud accordingly",
+            '  ("Got it — it\'s in the approval queue; it runs as soon as you',
+            '  approve it.") NEVER say it is done, scheduled or sent, and never',
+            '  say "after the meeting" or "once we wrap".',
             "- queue_action returned needs_details: ONE short question for the",
             "  missing fields, then call again with the SAME request_id. Ask the",
             "  same detail at most TWICE (second time rephrase with an example);",
@@ -274,12 +223,9 @@ def build_init_payload(session, avatar) -> dict:
                     "  queue_action right away. Never promise unqueued follow-ups.",
                 ]
             ),
-            "- That READ limit is not a write limit: it never stops you",
-            "  preparing a write in any app listed in connected_apps.",
-            "- Actions run ONCE APPROVED on the dashboard: say you PREPARED it",
-            "  and 'it's in the approval queue; it runs as soon as you approve",
-            "  it' — never 'after the meeting', never that it is",
-            "  scheduled/sent/done.",
+            "- Actions run ONCE APPROVED on the dashboard: say 'it's in the",
+            "  approval queue; it runs as soon as you approve it' — never",
+            "  'after the meeting', never that it is scheduled/sent/done.",
             "- BREVITY: 1-2 sentences, at most ONE clarifying question, stop.",
             "  No 'anything else?', no unprompted capability lists, no extra",
             "  action proposals nobody asked for.",
@@ -689,11 +635,7 @@ def _tool_queue_action(session, params: dict, tool_call_id: str) -> dict:
         text = f"{text} (requested by {requested_by})"
     if not text:
         return {"status": "needs_details", "missing": ["summary"]}
-    # Classify against the ORG's connected apps (join-cached, zero network on
-    # this path): naming a connected app routes the ask to that app's family
-    # before the generic vocabulary, so "a page … with a short MEETING summary"
-    # can no longer be captured as a calendar write (live 2026-07-29).
-    kind = brain_tools.ask_kind(text, connected_apps=_connected_apps_context(session))
+    kind = brain_tools.ask_kind(text)
     missing = brain_tools.missing_action_details(text, kind)
     if missing:
         # Anti-loop (live 2026-07-24: "I need the full email body" repeated

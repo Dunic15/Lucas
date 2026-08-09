@@ -248,19 +248,6 @@ _TYPED_FAMILY = {
     "asana": "asana",
 }
 
-# Ask kind (brain.tools.ask_kind) → the typed spec the approve door synthesises
-# when typing produced nothing, so the card opens a needs-details FORM for the
-# right fields instead of dead-ending as tracked-only. Notion was missing here
-# (live 2026-07-29): a page ask either fell through to tracked-only or, once
-# mis-classified as calendar, opened a form asking for a start and end time.
-# Every kind listed must have a PARAMS_SCHEMA in action_plane.
-_SYNTH_TYPE_BY_KIND = {
-    "task": "asana.create_task",
-    "email": "email.send",
-    "calendar": "calendar.create_event",
-    "notion": "notion.create_page",
-}
-
 
 def _action_family(action: dict) -> str:
     """Which executor app family this card would run against ("" = unknown).
@@ -3695,7 +3682,8 @@ async def approve_action(action_id: str, request: Request) -> JSONResponse:
 
         _ask_text = str(action.get("action") or action.get("item") or "")
         _kind = _brain_tools.ask_kind(_ask_text)
-        _synth = _SYNTH_TYPE_BY_KIND.get(_kind)
+        _synth = {"task": "asana.create_task", "email": "email.send",
+                  "calendar": "calendar.create_event"}.get(_kind)
         # Granularity guards (live 2026-07-24): a "create a project/portfolio"
         # ask synthesises create_project, never a create-task form; a
         # collaborator/membership ask has NO executor — stays tracked-only

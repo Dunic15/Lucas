@@ -81,119 +81,6 @@ def family_verbs_text(slug: str) -> str:
     return ", ".join(family_verbs(slug))
 
 
-# Families surfaced as their own native rows below — never duplicated into the
-# generic connected-app bucket.
-_NATIVE_ROW_SLUGS = frozenset(
-    {"slack", "asana", "google", "gmail", "google_calendar", "google_drive"}
-)
-
-
-def org_connected_apps(org_id: str) -> dict[str, list[str]]:
-    """The ORG's connected-app catalog: ``{app_slug: [executable verbs]}``.
-
-    Sourced from ``app_policy.catalog`` — the ONE place that turns "which
-    accounts did this org actually connect" into a capability answer. The
-    avatar's self-knowledge, OpenClaw Chat and the proxy executor therefore
-    read the same catalog, so none of them can claim a capability another one
-    would refuse.
-
-    This exists because the avatar's self-knowledge used to come from somewhere
-    else entirely: a hardcoded Gmail/Calendar/Drive/Asana list plus whichever
-    Pipedream apps the owner had EXPLICITLY toggled on for that avatar. A
-    workspace whose Notion OpenClaw can run was therefore invisible to the
-    avatar, which then told the room Notion was not connected (live
-    2026-07-29). One catalog, one answer.
-
-    The verbs are derived from the executor's own mapper plus the app registry,
-    so nothing here needs Pipedream's separately priced pre-built action
-    catalog. An app the org connected but for which Laura has no registered API
-    surface still appears with no verbs — present and honestly bounded, never
-    denied.
-
-    SYNC + best-effort: called once at session start (never on the live path),
-    and any failure yields ``{}`` so a join is never blocked by a catalog GET.
-    """
-    org = str(org_id or "").strip()
-    if not org:
-        return {}
-    try:
-        from ..actions import app_policy
-
-        return {
-            entry["slug"]: app_policy.verbs_for(
-                entry["slug"], entry["deterministic_types"]
-            )
-            for entry in app_policy.catalog(org)
-            if entry.get("slug")
-        }
-    except Exception:  # noqa: BLE001 — never block a join over the catalog
-        return {}
-
-
-def org_connected_app_limits(org_id: str) -> dict[str, str]:
-    """``{slug: limit}`` for connected apps whose capability is bounded.
-
-    Only apps with a REAL limit appear, so the brief stays quiet about the
-    ordinary case and the avatar can name what it cannot do instead of
-    promising a generic API call it would then fail to make.
-    """
-    org = str(org_id or "").strip()
-    if not org:
-        return {}
-    try:
-        from ..actions import app_policy
-
-        return {
-            entry["slug"]: entry["limit"]
-            for entry in app_policy.catalog(org)
-            if entry.get("slug") and entry.get("limit")
-        }
-    except Exception:  # noqa: BLE001 — never block a join over the catalog
-        return {}
-
-
-def _connected_app_buckets(
-    org_id: str, avatar: Any
-) -> tuple[list[dict], list[str]]:
-    """Split the org's connected-app catalog into what THIS avatar may use and
-    what the workspace has but the avatar is not enabled for.
-
-    The per-avatar switch follows ``store.capability_enabled``: an explicit
-    ``False`` blocks, and an app nobody ever toggled defaults to the org's
-    connected state. The previous rule demanded an explicit ``True``, so an
-    untouched avatar in a workspace with Notion connected saw nothing at all —
-    and denying a connected app is worse than either honest answer.
-    """
-    from .. import store
-
-    avatar_id = str(getattr(avatar, "id", "") or "")
-    limits = org_connected_app_limits(org_id)
-    enabled_apps: list[dict] = []
-    org_available: list[str] = []
-    for slug, verbs in sorted(org_connected_apps(org_id).items()):
-        if slug in _NATIVE_ROW_SLUGS:
-            continue
-        try:
-            allowed = store.capability_enabled(
-                avatar_id, slug, connected=True, org_id=org_id
-            )
-        except Exception:  # noqa: BLE001 — a toggle read never blocks the join
-            allowed = True
-        if allowed:
-            entry = {
-                "slug": slug,
-                "actions": list(verbs or family_verbs(slug))[:4],
-            }
-            # Only a REAL limit is carried. An empty one says nothing and stays
-            # out of the brief, which rides in every live turn under a cap.
-            if limits.get(slug):
-                entry["limit"] = limits[slug]
-            enabled_apps.append(entry)
-        elif slug not in org_available:
-            org_available.append(slug)
-    return enabled_apps[:6], org_available[:6]
-
-
 def assemble(org_id: str, avatar: Any) -> dict | None:
     """Build the org-scoped registry. SYNC + network (one Cedric catalog GET) —
     call via run_in_threadpool at session start only. Best-effort: any failure
@@ -295,35 +182,64 @@ def assemble(org_id: str, avatar: Any) -> dict | None:
                 "verbs": _family_verbs("asana"),
             })
 
-        # Generic connected apps (Notion / GitHub / Jira / HubSpot / …) — from
-        # the ORG's connected-app catalog, so the avatar knows IN CONVERSATION
-        # what it can capture and can never deny an app the execution plane can
-        # actually run (live 2026-07-29). An app the owner explicitly toggled
-        # off for this avatar lands in pd_org_available instead: present but
-        # not promised, which is honest either way.
+        # Generic Pipedream apps enabled for THIS avatar (Notion / GitHub / Jira
+        # / HubSpot / …), each with a few of its pre-built actions — so the
+        # avatar knows IN CONVERSATION what it can capture, not only at typing
+        # time. Opt-in per avatar (same toggle the approve door enforces).
         pd_apps: list[dict] = []
         pd_org_available: list[str] = []
         try:
-            pd_apps, pd_org_available = _connected_app_buckets(org_id, avatar)
-            # Pipedream's pre-built action NAMES read better than the derived
-            # verbs when its (separately priced) catalog is available. Purely
-            # cosmetic: the verb fallback keeps the app listed either way.
-            try:
-                from .. import pipedream_client, pipedream_executor
+            from .. import pipedream_client, pipedream_executor
 
-                if pipedream_executor.enabled():
-                    for app in pd_apps:
+            if pipedream_executor.enabled():
+                caps = store.get_avatar_capabilities(
+                    getattr(avatar, "id", ""), org_id
+                )
+                _skip = {"slack", "asana", "google",
+                         "gmail", "google_calendar", "google_drive"}
+                try:
+                    _accounts = pipedream_client.list_accounts(org_id)
+                except Exception:  # noqa: BLE001 — catalog truth is best-effort
+                    _accounts = []
+                _connected = {
+                    str(a.get("app") or "")
+                    for a in _accounts
+                    if isinstance(a, dict) and a.get("app") and a.get("id")
+                }
+                for slug in sorted(
+                    k for k, v in caps.items() if v and k not in _skip
+                )[:4]:
+                    if slug not in _connected and not (
+                        not _accounts
+                        and pipedream_executor.app_connected(org_id, slug)
+                    ):
+                        continue
+                    try:
                         names = [
                             str(a.get("name") or "")
-                            for a in pipedream_client.list_actions(
-                                app["slug"], limit=5
-                            )
+                            for a in pipedream_client.list_actions(slug, limit=5)
                         ]
-                        names = [n for n in names if n]
-                        if names:
-                            app["actions"] = names[:4]
-            except Exception:  # noqa: BLE001 — paid catalog is optional
-                pass
+                    except Exception:  # noqa: BLE001 — paid catalog is optional
+                        names = []
+                    # Deterministic proxy actions (notably Notion create_page)
+                    # remain usable when Pipedream's separately priced action
+                    # catalog is unavailable.
+                    names = [n for n in names if n] or family_verbs(slug)
+                    pd_apps.append(
+                        {"slug": slug, "actions": [n for n in names if n][:4]}
+                    )
+                # Org-connected apps this avatar is NOT enabled for — surfaced
+                # as their own brief bucket so the avatar can say "your org has
+                # Notion, but I'm not enabled for it" instead of denying the
+                # tool exists (truthfulness gap seen live 2026-07-21).
+                enabled_slugs = {a["slug"] for a in pd_apps}
+                for acct in _accounts:
+                    slug = str(acct.get("app") or "")
+                    if (slug and slug not in _skip
+                            and slug not in enabled_slugs
+                            and not caps.get(slug)
+                            and slug not in pd_org_available):
+                        pd_org_available.append(slug)
         except Exception:  # noqa: BLE001 — never block a join over the catalog
             pd_apps = pd_apps or []
         reg["pd_apps"] = pd_apps

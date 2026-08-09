@@ -290,15 +290,10 @@ def test_dashboard_chat_is_chat_only_and_tasks_stay_in_action_center():
     assert 'class="ac-meeting"' in html
     assert 'data-acchat="' in html
     assert "discussOpenClawMeeting" in html
-    assert "renderOpenClawThreads();" in html
-    assert "option.value===activeThread.meeting_id" in html
     assert "Review the saved action before approving a retry." in html
     assert "Tasks ready to work on" not in html
     assert "oc-task-list" not in html
     assert "renderOpenClawTasks" not in html
     assert "OpenClaw Action Center" not in html
     assert "OpenClaw Chat" not in html
-    assert "What can I do?" not in html
-    assert "pd-acts-btn" not in html
-    assert "/dashboard/pipedream/actions?app=" not in html
     assert html.index("var OC_CHAT_HISTORY") < html.index("var _hashView")
