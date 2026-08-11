@@ -1346,3 +1346,55 @@ def test_direct_meeting_runs_openclaw_once_end_to_end(
     assert replay["run"]["run_id"] == run_id
     assert len(vendor_calls) == 1
     assert len(runtime.list_runs(active_openclaw)) == 1
+
+
+def test_tool_bridge_route_returns_200_and_keeps_the_action_status(
+    active_openclaw, monkeypatch
+):
+    """The HTTP route must not read the ACTION status as an HTTP code.
+
+    Every other tool-bridge test calls ``runtime.run_tool`` directly, so
+    nothing exercised the route itself — and the route turned every
+    successful call into a 500 via ``int("done")``.
+    """
+    monkeypatch.setattr(settings, "openclaw_auto_run", False)
+    result = runtime.create_meeting_run(
+        "bot_openclaw_route", _artifact("oc_route"), active_openclaw
+    )
+    token = runtime.mint_capability(active_openclaw, result["run"]["run_id"])
+    monkeypatch.setattr(
+        runtime,
+        "_execute_side_effect",
+        lambda *args: {
+            "ok": True,
+            "kind": "fake email",
+            "ref": "msg_route",
+            "route": "openclaw",
+        },
+    )
+    client = TestClient(main_module.app)
+
+    response = client.post(
+        "/openclaw/tools/gmail_send",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"action_id": "oc_route", "step_id": "route-1"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    # the action status stays in the body — the gateway reads it there
+    assert body["status"] == "done"
+
+
+def test_tool_bridge_route_still_maps_an_integer_status_to_http(active_openclaw):
+    client = TestClient(main_module.app)
+
+    response = client.post(
+        "/openclaw/tools/gmail_send",
+        headers={"Authorization": "Bearer not-a-capability"},
+        json={"action_id": "oc_route", "step_id": "route-1"},
+    )
+
+    assert response.status_code == 401
+    assert "status" not in response.json()
