@@ -491,6 +491,15 @@ def test_approving_one_action_never_exposes_unapproved_siblings(
     assert tool["parameters"]["properties"]["action_id"]["enum"] == [
         "oc_approved_only"
     ]
+    # The request counter ticks INSIDE the fake post, before run_openclaw has
+    # processed that response — waiting on it alone races the worker thread to
+    # _finish_openresponses_run. Wait for the settled run instead.
+    assert _wait_until(
+        lambda: (
+            runtime.get_run(active_openclaw, created["run"]["run_id"]) or {}
+        ).get("status")
+        == "queued"
+    )
     detail = runtime.run_detail(active_openclaw, created["run"]["run_id"])
     assert detail is not None
     assert detail["status"] == "queued"
@@ -593,6 +602,32 @@ def test_openclaw_chat_threads_are_separate_and_org_scoped(
     ) is None
 
 
+def test_openclaw_chat_delete_is_permanent_and_org_scoped(
+    active_openclaw, monkeypatch
+):
+    monkeypatch.setattr(settings, "openclaw_experiment_orgs", "*")
+    thread = runtime.create_chat_thread(active_openclaw)
+    assert thread is not None
+    runtime.add_chat_thread_message(
+        active_openclaw, thread["thread_id"], "user", "Private draft"
+    )
+
+    other_org = "00000000-0000-0000-0000-000000000999"
+    assert runtime.delete_chat_thread(other_org, thread["thread_id"]) is False
+    assert runtime.get_chat_thread(active_openclaw, thread["thread_id"])
+
+    assert (
+        runtime.delete_chat_thread(active_openclaw, thread["thread_id"]) is True
+    )
+    assert runtime.get_chat_thread(active_openclaw, thread["thread_id"]) is None
+    assert runtime.list_chat_thread_messages(
+        active_openclaw, thread["thread_id"]
+    ) == []
+    assert (
+        runtime.delete_chat_thread(active_openclaw, thread["thread_id"]) is False
+    )
+
+
 def test_openclaw_chat_falls_back_when_postgres_tables_are_unavailable(
     active_openclaw, monkeypatch
 ):
@@ -675,6 +710,32 @@ def test_dashboard_chat_endpoint_persists_thread_history(
     assert detail["messages"][-1]["text"].endswith(
         "Draft a Notion workflow"
     )
+
+
+def test_dashboard_chat_delete_removes_only_the_selected_thread(
+    active_openclaw, monkeypatch
+):
+    client = TestClient(main_module.app)
+    first = client.post(
+        "/dashboard/openclaw/chats", json={"meeting_id": "bot_one"}
+    ).json()["thread"]
+    second = client.post(
+        "/dashboard/openclaw/chats", json={"meeting_id": "bot_two"}
+    ).json()["thread"]
+
+    deleted = client.delete(
+        f"/dashboard/openclaw/chats/{first['thread_id']}"
+    )
+    assert deleted.status_code == 200
+    assert client.get(
+        f"/dashboard/openclaw/chats/{first['thread_id']}"
+    ).status_code == 404
+    assert client.get(
+        f"/dashboard/openclaw/chats/{second['thread_id']}"
+    ).status_code == 200
+    assert client.delete(
+        f"/dashboard/openclaw/chats/{first['thread_id']}"
+    ).status_code == 404
 
 
 def test_openclaw_chat_answers_from_distilled_meeting_context_only(
@@ -1282,6 +1343,12 @@ def test_direct_meeting_runs_openclaw_once_end_to_end(
     runs = runtime.list_runs(active_openclaw)
     assert len(runs) == 1
     run_id = runs[0]["run_id"]
+    # Same race as above: the second request is recorded before the worker has
+    # settled the run, so wait for the terminal status before asserting on it.
+    assert _wait_until(
+        lambda: (runtime.get_run(active_openclaw, run_id) or {}).get("status")
+        == "done"
+    )
 
     first_request = gateway_requests[0]
     second_request = gateway_requests[1]

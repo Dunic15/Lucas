@@ -20,7 +20,7 @@ from typing import Any
 from .. import control_plane, native_runtime, pipedream_client, pipedream_executor, store
 from ..actions import action_plane, executor, ledger, outbox
 from ..config import settings
-from . import gates
+from . import dependencies, gates
 
 RUN_STATUSES = (
     "queued", "planning", "running", "needs_attention", "done", "failed",
@@ -52,6 +52,14 @@ _ACTION_TOOL_BY_TYPE = {
     "browser.manual": "browser_fallback",
 }
 _MAX_OPENRESPONSES_TURNS = 32
+# Structured refusal codes for the dependency contract. They travel back to the
+# gateway as data — never as an exception — so a misbehaving planner learns why
+# it was refused instead of retrying blind. HTTP 409: the request was
+# well-formed and authorized, the run state just does not allow it yet.
+DEPENDENCY_CONFLICT_STATUS = 409
+DEPENDENCY_NOT_READY = "dependency_not_ready"
+DEPENDENCY_BLOCKED = "dependency_blocked"
+DEPENDENCY_PLAN_REJECTED = "invalid_dependency_plan"
 _SCHEMA_READY = False
 _SCHEMA_STORE_PATH = ""
 _SCHEMA_LOCK = threading.Lock()
@@ -592,6 +600,77 @@ def chat_thread_detail(org_id: str, thread_id: str) -> dict | None:
         return None
     thread["messages"] = list_chat_thread_messages(org_id, thread_id)
     return thread
+
+
+def delete_chat_thread(org_id: str, thread_id: str) -> bool:
+    """Permanently delete one active chat owned by this organization."""
+    org = str(org_id or "").strip()
+    tid = str(thread_id or "").strip()
+    if not org or not tid:
+        return False
+    if _chat_pg(org):
+        engine = control_plane._get_engine()
+        with engine.begin() as conn:
+            control_plane._set_org(conn, org)
+            owned = _pg_fetchone(
+                conn,
+                """
+                SELECT thread_id FROM openclaw_chat_threads
+                WHERE org_id=:org_id AND thread_id=:thread_id
+                  AND archived=false
+                FOR UPDATE
+                """,
+                {"org_id": org, "thread_id": tid},
+            )
+            if owned is None:
+                return False
+            conn.execute(
+                _text(
+                    """
+                    DELETE FROM openclaw_chat_messages
+                    WHERE org_id=:org_id AND thread_id=:thread_id
+                    """
+                ),
+                {"org_id": org, "thread_id": tid},
+            )
+            conn.execute(
+                _text(
+                    """
+                    DELETE FROM openclaw_chat_threads
+                    WHERE org_id=:org_id AND thread_id=:thread_id
+                    """
+                ),
+                {"org_id": org, "thread_id": tid},
+            )
+        return True
+    _ensure_sqlite_schema()
+    with store._LOCK, store._connect() as conn:
+        owned = conn.execute(
+            """
+            SELECT thread_id FROM openclaw_chat_threads
+            WHERE org_id=? AND thread_id=? AND archived=0
+            """,
+            (org, tid),
+        ).fetchone()
+        if owned is None:
+            return False
+        # SQLite foreign-key enforcement can vary between local connections.
+        # Delete the children explicitly so no transcript survives the thread.
+        conn.execute(
+            """
+            DELETE FROM openclaw_chat_messages
+            WHERE org_id=? AND thread_id=?
+            """,
+            (org, tid),
+        )
+        deleted = conn.execute(
+            """
+            DELETE FROM openclaw_chat_threads
+            WHERE org_id=? AND thread_id=?
+            """,
+            (org, tid),
+        )
+    return deleted.rowcount == 1
 
 
 def add_chat_thread_message(
@@ -1989,6 +2068,205 @@ def _action_for_run(org_id: str, run_id: str, action_id: str) -> dict | None:
     return None
 
 
+def _run_actions(org_id: str, run_id: str) -> list[dict]:
+    """This run's canonical actions, in plan order, from the stored payload.
+
+    ``depends_on`` survives only here (``_sanitize_action`` keeps it, the
+    ``openclaw_action_runs`` row does not have the column), so the dependency
+    contract always reads the plan from the payload and the *state* from the
+    action rows.
+    """
+    run = get_run(org_id, run_id) or {}
+    payload = run.get("input") if isinstance(run.get("input"), dict) else {}
+    return [a for a in (payload.get("actions") or []) if isinstance(a, dict)]
+
+
+def _action_statuses(org_id: str, run_id: str) -> dict[str, str]:
+    """Live ``action_id -> status`` for one run, straight from its action rows."""
+    detail = run_detail(org_id, run_id) or {}
+    out: dict[str, str] = {}
+    for action in detail.get("actions") or []:
+        aid = str(action.get("action_id") or "")
+        if aid:
+            out[aid] = str(action.get("status") or "")
+    return out
+
+
+def _settle_dependency_block(
+    org_id: str,
+    run_id: str,
+    action_id: str,
+    *,
+    reason: str,
+    code: str,
+    blocked_by: list[str],
+) -> None:
+    """Settle one action we refuse to execute — no vendor call is ever made.
+
+    The receipt says ``executed: False`` and names the prerequisite, so the
+    dashboard can tell "we did not do this, and here is why" apart from "we
+    tried and the vendor said no".
+    """
+    receipt = {
+        "kind": "OpenClaw dependency",
+        "route": "openclaw",
+        "executed": False,
+        "error": code,
+        "blocked_by": list(blocked_by)[:20],
+    }
+    _set_action_run(
+        org_id,
+        run_id,
+        action_id,
+        dependencies.BLOCKED_STATUS,
+        summary=reason[:500],
+        receipt=receipt,
+        error=f"{code}: {reason}"[:500],
+    )
+    # The canonical ledger has no "blocked" state and the action is already
+    # claimed 'executing' by approve_action; leaving it claimed would strand it
+    # forever, so close it the same way every other non-completion closes.
+    ledger.set_action_status(
+        action_id, "failed", reason[:300], org_id=org_id, receipt=receipt,
+    )
+    _event(
+        org_id,
+        run_id,
+        "action_blocked",
+        reason[:300],
+        action_id=action_id,
+        status=dependencies.BLOCKED_STATUS,
+        safe={"error_code": code, "blocked_by": list(blocked_by)[:10]},
+    )
+
+
+def _cascade_dependency_blocks(
+    org_id: str, run_id: str, trigger_ids: set[str]
+) -> list[str]:
+    """Settle everything downstream of an action that will never be ``done``.
+
+    Without this the run would sit unfinished whenever the gateway simply stops
+    asking after a failure. Only actions that DECLARE the broken action as a
+    prerequisite (directly or transitively) are touched — an unrelated sibling
+    that merely happens to be queued is never swept up.
+    """
+    actions = _run_actions(org_id, run_id)
+    doomed = dependencies.transitive_dependents(actions, set(trigger_ids))
+    if not doomed:
+        return []
+    statuses = _action_statuses(org_id, run_id)
+    settled: list[str] = []
+    for aid in doomed:
+        if statuses.get(aid, "") in TERMINAL_RUN_STATUSES:
+            continue
+        deps = [
+            dep
+            for dep in dependencies.normalize_depends_on(
+                next(
+                    (a for a in actions if str(a.get("action_id") or "") == aid),
+                    {},
+                )
+            )
+            if dep in trigger_ids or statuses.get(dep, "") in
+            dependencies.BLOCKING_STATUSES
+        ]
+        _settle_dependency_block(
+            org_id,
+            run_id,
+            aid,
+            reason=(
+                "not executed: a prerequisite will never complete ("
+                + dependencies.describe_prerequisites(deps or sorted(trigger_ids), statuses)
+                + ")"
+            ),
+            code=DEPENDENCY_BLOCKED,
+            blocked_by=deps or sorted(trigger_ids),
+        )
+        settled.append(aid)
+        statuses[aid] = dependencies.BLOCKED_STATUS
+    return settled
+
+
+def _dependency_refusal(
+    org_id: str, run_id: str, action_id: str, canonical: dict
+) -> dict | None:
+    """The server's dependency verdict for one action, or ``None`` to proceed.
+
+    THE enforcement point. The gateway is a language model: it is *told* to
+    call actions in ascending order, but nothing stops it calling step 3 first,
+    or calling step 2 after step 1 failed. This decides from state Laura owns —
+    the plan from the stored payload, the prerequisite status from the action
+    rows — so the verdict never depends on gateway call order. It runs before
+    any tool-call row is inserted, so a refusal costs no vendor call and leaves
+    the action retryable when the refusal is merely "too early".
+    """
+    actions = _run_actions(org_id, run_id)
+    problems = dependencies.validate_dependency_graph(actions)
+    if action_id in problems:
+        reason = "rejected dependency plan: " + problems[action_id]
+        _settle_dependency_block(
+            org_id,
+            run_id,
+            action_id,
+            reason=reason,
+            code=DEPENDENCY_PLAN_REJECTED,
+            blocked_by=dependencies.normalize_depends_on(canonical),
+        )
+        return {
+            "ok": False,
+            "status": DEPENDENCY_CONFLICT_STATUS,
+            "code": DEPENDENCY_PLAN_REJECTED,
+            "error": reason,
+            "action_status": dependencies.BLOCKED_STATUS,
+            "replay": False,
+        }
+    if not dependencies.normalize_depends_on(canonical):
+        return None
+    statuses = _action_statuses(org_id, run_id)
+    decision, reason, blockers = dependencies.gate(canonical, statuses)
+    if decision == dependencies.ALLOW:
+        return None
+    if decision == dependencies.BLOCKED:
+        _settle_dependency_block(
+            org_id,
+            run_id,
+            action_id,
+            reason=reason,
+            code=DEPENDENCY_BLOCKED,
+            blocked_by=blockers,
+        )
+        _cascade_dependency_blocks(org_id, run_id, {action_id})
+        return {
+            "ok": False,
+            "status": DEPENDENCY_CONFLICT_STATUS,
+            "code": DEPENDENCY_BLOCKED,
+            "error": reason,
+            "blocked_by": blockers,
+            "action_status": dependencies.BLOCKED_STATUS,
+            "replay": False,
+        }
+    # WAIT — the gateway asked out of order. Nothing is written and no status
+    # changes: the prerequisite can still land, and this action stays claimed
+    # and runnable. The refusal is data the planner can act on.
+    _event(
+        org_id,
+        run_id,
+        "action_out_of_order",
+        reason[:300],
+        action_id=action_id,
+        status="running",
+        safe={"error_code": DEPENDENCY_NOT_READY, "blocked_by": blockers[:10]},
+    )
+    return {
+        "ok": False,
+        "status": DEPENDENCY_CONFLICT_STATUS,
+        "code": DEPENDENCY_NOT_READY,
+        "error": reason,
+        "blocked_by": blockers,
+        "replay": False,
+    }
+
+
 def _openresponses_tools(
     run: dict,
     *,
@@ -2187,6 +2465,32 @@ def run_openclaw(org_id: str, run_id: str) -> None:
     }
     if not approved_ids:
         _update_run(org_id, run_id, "queued")
+        return
+    # Fail closed on a structurally impossible plan BEFORE the gateway sees it.
+    # An action with an unknown/self/forward/circular dependency is settled
+    # here and dropped from the approved set, so it never reaches the tool
+    # enum and the gateway is never offered a call it must not make.
+    rejected = dependencies.validate_dependency_graph(_run_actions(org_id, run_id))
+    for aid in sorted(approved_ids & set(rejected)):
+        _settle_dependency_block(
+            org_id,
+            run_id,
+            aid,
+            reason="rejected dependency plan: " + rejected[aid],
+            code=DEPENDENCY_PLAN_REJECTED,
+            blocked_by=[],
+        )
+    approved_ids -= set(rejected)
+    if not approved_ids:
+        _settle_gateway_failure(
+            org_id,
+            run_id,
+            "OpenClaw refused the plan: every approved action declares an "
+            "impossible dependency; nothing was sent to the gateway.",
+            run_status="needs_attention",
+            code=DEPENDENCY_PLAN_REJECTED,
+            action_ids=approved_ids,
+        )
         return
     _update_run(org_id, run_id, "planning")
     _event(
@@ -3387,6 +3691,13 @@ def run_tool(capability_token: str, tool_name: str, request: dict) -> dict:
     existing = _tool_existing_for_action(org_id, run_id, action_id)
     if existing is not None:
         return _shape_tool_row(existing)
+    # Exactly-once wins over the dependency gate: an action with a recorded
+    # tool call already wrote to the vendor, and replaying that receipt is the
+    # honest answer no matter what the plan says now. Only work that has NOT
+    # happened yet is gated.
+    refusal = _dependency_refusal(org_id, run_id, action_id, canonical)
+    if refusal is not None:
+        return refusal
     inserted = _insert_tool_call(
         org_id, run_id, action_id, step_id, tool, body
     )
@@ -3422,6 +3733,11 @@ def run_tool(capability_token: str, tool_name: str, request: dict) -> dict:
         action_id=action_id, tool=tool, status=status,
         safe={"ok": ok, "kind": result.get("kind"), "route": result.get("route")},
     )
+    if status in dependencies.BLOCKING_STATUSES:
+        # This action can never reach 'done', so nothing that depends on it can
+        # run either. Settle the tail now rather than waiting for a gateway
+        # call that may never come — that is what leaves a run unfinished.
+        _cascade_dependency_blocks(org_id, run_id, {action_id})
     return {"ok": ok, "status": status, "result": result, "replay": False}
 
 

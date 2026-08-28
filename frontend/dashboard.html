@@ -236,14 +236,23 @@
   .detail .inner{padding:14px 18px 16px;display:grid;grid-template-columns:1.4fr 1fr;gap:20px;}
   .summary.tscript{max-height:260px;overflow-y:auto;white-space:pre-wrap;font-size:.8rem;color:var(--dim);padding-right:6px;}
   .ac-sub-h{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:18px 0 8px;}
-  .ac-meet-h{display:flex;align-items:center;gap:8px;margin:22px 0 6px;padding:9px 14px;border:1px solid var(--line-soft,var(--line));border-radius:12px;background:var(--panel);font-size:.86rem;color:var(--fg);cursor:pointer;user-select:none;transition:background .18s ease;}
-  .ac-meet-h:hover{background:var(--panel-2,var(--panel));}
-  .ac-meet-h .ac-meet-sum{margin-left:auto;color:var(--dim);font-size:.8rem;}
-  .ac-meet-h .ac-meet-caret{color:var(--dim);}
-  /* Per-meeting interactivity (owner 2026-07-22): count chips FILTER the group
-     by state; a tiny bar shows how much of the meeting is settled. The chips
-     double as the collapsed one-line summary. */
-  .ac-meet-h .ac-chips{display:flex;gap:6px;margin-left:auto;align-items:center;flex-wrap:wrap;}
+  .ac-meeting{border-top:1px solid var(--line);padding:18px 0 8px;}
+  .ac-meeting:first-child{border-top:0;padding-top:2px;}
+  .ac-meeting-head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center;}
+  .ac-meet-toggle{display:flex;align-items:flex-start;gap:11px;min-width:0;padding:7px 0;border:0;background:transparent;
+    color:var(--text);font:inherit;text-align:left;cursor:pointer;}
+  .ac-meet-toggle:hover .ac-meeting-title{color:var(--live);}
+  .ac-meet-toggle .av{width:34px;height:34px;flex:0 0 34px;}
+  .ac-meeting-copy{display:flex;flex-direction:column;gap:2px;min-width:0;}
+  .ac-meeting-kicker{font-family:var(--mono);font-size:.58rem;text-transform:uppercase;color:var(--faint);}
+  .ac-meeting-title{font-size:.94rem;font-weight:700;line-height:1.35;}
+  .ac-meeting-meta{font-size:.76rem;color:var(--faint);line-height:1.4;}
+  .ac-meeting-summary{font-size:.79rem;color:var(--dim);line-height:1.45;max-width:700px;margin-top:3px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .ac-meet-caret{color:var(--faint);font-size:.82rem;margin:9px 0 0 2px;}
+  .ac-meeting-tools{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap;}
+  .ac-meeting-tools .btn{padding:7px 10px;font-size:.75rem;white-space:nowrap;}
+  .ac-chips{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
   .ac-chip{font:inherit;font-family:var(--mono);font-size:.64rem;font-weight:700;padding:2px 8px;border-radius:999px;
     border:1px solid transparent;cursor:pointer;color:var(--dim);background:var(--panel-2,rgba(126,182,255,.08));transition:border-color .14s;}
   .ac-chip:hover{border-color:rgba(126,182,255,.5);}
@@ -253,14 +262,9 @@
   .ac-chip.on{border-color:currentColor;}
   .ac-meet-prog{height:3px;border-radius:99px;background:var(--line-soft,var(--line));flex:0 0 56px;overflow:hidden;}
   .ac-meet-prog i{display:block;height:100%;width:var(--p,0%);background:var(--grad,#7eb6ff);border-radius:99px;}
-  .ac-meet-body[data-acfilter] .ac-sub-h,.ac-meet-body[data-acfilter] .ac-sub-note{display:none;}
-  .ac-meet-body[data-acfilter="attn"] .ac-card:not([data-bucket="attn"]),
-  .ac-meet-body[data-acfilter="progress"] .ac-card:not([data-bucket="progress"]),
-  .ac-meet-body[data-acfilter="done"] .ac-card:not([data-bucket="done"]){display:none;}
-  .ac-meet-body{animation:acbody .18s ease;}
+  .ac-meet-body{animation:acbody .18s ease;padding-left:45px;}
   @keyframes acbody{from{opacity:.4;transform:translateY(-3px);}to{opacity:1;transform:none;}}
-  @media (prefers-reduced-motion: reduce){ .ac-meet-body{animation:none;} .ac-meet-h{transition:none;} }
-  .ac-meet-h:first-child{margin-top:4px;}
+  @media (prefers-reduced-motion: reduce){ .ac-meet-body{animation:none;} }
   .ac-needs{margin-top:6px;font-size:.8rem;color:var(--warn,#b45309);}
   .pbox{border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:10px 0;}
   .prow{display:flex;gap:12px;padding:4px 0;font-size:.9rem;}
@@ -712,17 +716,24 @@
     color:var(--dim);font-size:.76rem;line-height:1.45;}
 
   /* ── Chat ── */
-  .oc-chat{padding:0;overflow:hidden;display:grid;grid-template-columns:220px minmax(0,1fr);}
+  .oc-chat{padding:0;overflow:hidden;display:grid;grid-template-columns:248px minmax(0,1fr);}
   .oc-threads{border-right:1px solid var(--line);background:var(--panel-2);min-width:0;}
   .oc-thread-head{height:54px;padding:9px 10px;display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid var(--line);}
   .oc-thread-head strong{font-size:.78rem;}
   .oc-thread-head .btn{padding:6px 9px;font-size:.73rem;white-space:nowrap;}
   .oc-thread-list{padding:6px;display:flex;flex-direction:column;gap:3px;max-height:min(72vh,760px);overflow:auto;}
   .oc-thread{border:1px solid transparent;background:transparent;color:var(--dim);width:100%;padding:9px 8px;border-radius:7px;
-    text-align:left;cursor:pointer;font:inherit;font-size:.77rem;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    text-align:left;cursor:pointer;font:inherit;display:flex;flex-direction:column;gap:3px;min-width:0;}
+  .oc-thread-title{font-size:.78rem;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%;}
+  .oc-thread-meta{font-size:.66rem;line-height:1.35;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:100%;}
   .oc-thread:hover{background:var(--line-soft);color:var(--text);}
   .oc-thread.on{background:var(--panel);border-color:var(--line);color:var(--text);font-weight:600;}
   .oc-chat-main{min-width:0;display:flex;flex-direction:column;}
+  .oc-chat-bar{min-height:54px;border-bottom:1px solid var(--line);padding:9px 14px;display:flex;align-items:center;justify-content:space-between;gap:12px;}
+  .oc-chat-heading{display:flex;flex-direction:column;gap:2px;min-width:0;}
+  .oc-chat-heading strong{font-size:.84rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .oc-chat-heading span{font-size:.7rem;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .oc-chat-bar .btn{padding:6px 9px;font-size:.72rem;white-space:nowrap;}
   .oc-chat-log{height:min(64vh,680px);min-height:420px;overflow:auto;padding:18px;display:flex;flex-direction:column;gap:13px;}
   .oc-msg{display:flex;gap:9px;align-items:flex-start;max-width:88%;}
   .oc-msg.user{align-self:flex-end;flex-direction:row-reverse;}
@@ -741,17 +752,23 @@
   .oc-runstate{font-size:.74rem;color:var(--faint);margin-top:8px;}
   .oc-compose{border-top:1px solid var(--line);padding:11px;background:var(--panel-2);}
   .oc-context{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+  .oc-context-label{font-family:var(--mono);font-size:.62rem;text-transform:uppercase;color:var(--faint);}
   .oc-context select{max-width:330px;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:var(--panel);color:var(--text);font-size:.76rem;}
   .oc-inputrow{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end;}
   .oc-inputrow textarea{width:100%;min-height:64px;max-height:160px;resize:vertical;border:1px solid var(--line);border-radius:8px;
     background:var(--panel);color:var(--text);font:inherit;font-size:.86rem;line-height:1.45;padding:10px 12px;}
   .oc-inputrow textarea:focus{outline:none;border-color:rgba(126,182,255,.6);}
   @media (max-width:720px){
+    .ac-meeting-head{grid-template-columns:1fr;gap:8px;}
+    .ac-meeting-tools{justify-content:flex-start;padding-left:45px;}
+    .ac-meet-body{padding-left:0;}
+    .ac-meeting-summary{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
     .oc-chat{grid-template-columns:1fr;}
     .oc-threads{border-right:0;border-bottom:1px solid var(--line);}
     .oc-thread-head{height:auto;padding:8px 10px;border-bottom:0;}
     .oc-thread-list{max-height:none;padding:0 8px 8px;flex-direction:row;overflow-x:auto;}
     .oc-thread{width:auto;min-width:132px;max-width:210px;}
+    .oc-chat-bar{min-height:50px;padding:8px 10px;}
     .oc-chat-log{min-height:300px;height:50vh;padding:12px;}
     .oc-msg{max-width:96%;}
     .oc-inputrow{grid-template-columns:1fr;}
@@ -1008,6 +1025,7 @@
       <div class="acbar">
         <div class="tabs" id="ac-tabs" role="tablist">
           <button class="on" data-ab="attn" role="tab" aria-selected="true">Needs attention</button>
+          <button data-ab="progress" role="tab" aria-selected="false">In progress</button>
           <button data-ab="done" role="tab" aria-selected="false">Completed</button>
         </div>
         <div class="filters" style="width:auto">
@@ -1033,11 +1051,19 @@
           <div class="oc-thread-list" id="oc-thread-list"></div>
         </aside>
         <div class="oc-chat-main">
+          <div class="oc-chat-bar">
+            <div class="oc-chat-heading">
+              <strong id="oc-chat-title">New chat</strong>
+              <span id="oc-chat-context">General workspace chat</span>
+            </div>
+            <button class="btn danger" id="oc-delete-chat" type="button" title="Permanently delete this chat" disabled>Delete chat</button>
+          </div>
           <div class="oc-chat-log" id="oc-chat-log" aria-live="polite"></div>
           <div class="oc-compose">
             <div class="oc-context">
+              <span class="oc-context-label">Context</span>
               <select id="oc-meeting" aria-label="Meeting context">
-                <option value="">Recent meetings</option>
+                <option value="">No specific meeting</option>
               </select>
             </div>
             <div class="oc-inputrow">
@@ -1413,12 +1439,42 @@
       .then(function(b){ if(b) renderBilling(b); })
       .catch(function(){ $("#billing-state").textContent="Billing temporarily unavailable"; });
   }
+  function openClawMeetingById(meetingId){
+    return ((DATA&&DATA.meetings)||[]).find(function(meeting){
+      return String(meeting.bot_id||"")===String(meetingId||"");
+    })||null;
+  }
+  function openClawMeetingTitle(meeting){
+    if(!meeting) return "Meeting";
+    if(meeting.source_surface==="openclaw_chat")
+      return meeting.workflow_title||"OpenClaw workflow";
+    var meetingType=String(meeting.meeting_type||"").replace(/_/g," ").trim();
+    if(meetingType&&meetingType!=="unknown")
+      return meetingType.charAt(0).toUpperCase()+meetingType.slice(1);
+    return String(meeting.platform&&meeting.platform!=="—"?meeting.platform:"Meeting")+" meeting";
+  }
+  function openClawMeetingContext(meeting){
+    if(!meeting) return "General workspace chat";
+    var pieces=[openClawMeetingTitle(meeting)];
+    if(meeting.avatar_id) pieces.push(avNameOf(meeting.avatar_id));
+    if(meeting.saved_at) pieces.push(fmtWhen(meeting.saved_at));
+    return pieces.join(" · ");
+  }
+  function updateOpenClawChatHeader(thread){
+    var title=$("#oc-chat-title"), context=$("#oc-chat-context"), remove=$("#oc-delete-chat");
+    if(title) title.textContent=thread?(thread.title||"New chat"):"No chat selected";
+    if(context){
+      var meeting=thread&&thread.meeting_id?openClawMeetingById(thread.meeting_id):null;
+      context.textContent=thread?(meeting?openClawMeetingContext(meeting):(thread.meeting_id?"Meeting chat":"General workspace chat")):"Start a new chat or choose one from the list";
+    }
+    if(remove) remove.disabled=!(thread&&thread.thread_id);
+  }
   function renderOpenClawMeetings(){
     var select=$("#oc-meeting"); if(!select||!DATA) return;
     var previous=select.value;
     var meetings=(DATA.meetings||[]).filter(function(m){return m.source_surface!=="openclaw_chat";});
-    select.innerHTML='<option value="">Recent meetings</option>'+meetings.slice(0,30).map(function(m){
-      return '<option value="'+esc(m.bot_id||"")+'">'+esc((m.platform||"Meeting")+" · "+fmtWhen(m.saved_at))+'</option>';
+    select.innerHTML='<option value="">No specific meeting</option>'+meetings.slice(0,30).map(function(m){
+      return '<option value="'+esc(m.bot_id||"")+'">'+esc(openClawMeetingContext(m))+'</option>';
     }).join("");
     if(previous&&Array.from(select.options).some(function(o){return o.value===previous;})) select.value=previous;
   }
@@ -1429,9 +1485,11 @@
       return;
     }
     box.innerHTML=OC_CHAT_THREADS.map(function(thread){
+      var meeting=thread.meeting_id?openClawMeetingById(thread.meeting_id):null;
       return '<button type="button" class="oc-thread'+(thread.thread_id===OC_CHAT_THREAD_ID?" on":"")+
         '" data-octhread="'+esc(thread.thread_id)+'" title="'+esc(thread.title||"New chat")+'">'+
-        esc(thread.title||"New chat")+'</button>';
+        '<span class="oc-thread-title">'+esc(thread.title||"New chat")+'</span>'+
+        '<span class="oc-thread-meta">'+esc(meeting?openClawMeetingContext(meeting):(thread.meeting_id?"Meeting chat":"General chat"))+'</span></button>';
     }).join("");
     $$("#oc-thread-list [data-octhread]").forEach(function(button){
       button.addEventListener("click",function(){
@@ -1477,6 +1535,7 @@
   function selectOpenClawThread(threadId,prefill){
     var tid=String(threadId||""); if(!tid) return Promise.resolve(null);
     OC_CHAT_THREAD_ID=tid; renderOpenClawThreads();
+    updateOpenClawChatHeader(OC_CHAT_THREADS.find(function(item){return item.thread_id===tid;})||null);
     var log=$("#oc-chat-log"); if(log) log.innerHTML='<div class="ph">Loading…</div>';
     return fetch("/dashboard/openclaw/chats/"+encodeURIComponent(tid),{headers:headers(),cache:"no-store"})
       .then(function(r){return r.json().catch(function(){return {};}).then(function(j){return {ok:r.ok,status:r.status,j:j};});})
@@ -1484,6 +1543,7 @@
         if(!res.ok||!res.j.thread) throw new Error(res.j.error||("HTTP "+res.status));
         if(OC_CHAT_THREAD_ID!==tid) return null;
         var thread=res.j.thread; rememberOpenClawThread(thread);
+        updateOpenClawChatHeader(thread);
         OC_CHAT_HISTORY=[]; if(log) log.innerHTML="";
         var messages=thread.messages||[];
         if(!messages.length) messages=[{role:"assistant",text:OC_CHAT_GREETING}];
@@ -1523,6 +1583,33 @@
       .catch(function(error){toast("Could not create a chat: "+error.message,true);})
       .finally(function(){if(button){button.disabled=false;button.textContent="+ New chat";}});
   }
+  function deleteOpenClawChat(){
+    var tid=OC_CHAT_THREAD_ID;
+    var thread=OC_CHAT_THREADS.find(function(item){return item.thread_id===tid;});
+    if(!tid||!thread) return;
+    if(!window.confirm('Delete "'+(thread.title||"this chat")+'"? This chat history cannot be recovered.')) return;
+    var button=$("#oc-delete-chat"); if(button){button.disabled=true;button.textContent="Deleting…";}
+    fetch("/dashboard/openclaw/chats/"+encodeURIComponent(tid),{
+      method:"DELETE",headers:headers()
+    }).then(function(r){return r.json().catch(function(){return {};}).then(function(j){return {ok:r.ok,status:r.status,j:j};});})
+      .then(function(res){
+        if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
+        OC_CHAT_THREADS=OC_CHAT_THREADS.filter(function(item){return item.thread_id!==tid;});
+        OC_CHAT_THREAD_ID=""; OC_CHAT_HISTORY=[];
+        renderOpenClawThreads();
+        if(OC_CHAT_THREADS.length) return selectOpenClawThread(OC_CHAT_THREADS[0].thread_id);
+        updateOpenClawChatHeader(null);
+        var meeting=$("#oc-meeting"); if(meeting) meeting.value="";
+        var log=$("#oc-chat-log"); if(log) log.innerHTML='<div class="empty">No chats yet. Start a new chat when you are ready.</div>';
+        var input=$("#oc-message"); if(input) input.focus();
+        return null;
+      })
+      .catch(function(error){toast("Could not delete this chat: "+error.message,true);})
+      .finally(function(){
+        var current=$("#oc-delete-chat");
+        if(current){current.textContent="Delete chat";current.disabled=!OC_CHAT_THREAD_ID;}
+      });
+  }
   function refreshOpenClawThreads(){
     return fetch("/dashboard/openclaw/chats",{headers:headers(),cache:"no-store"})
       .then(function(r){return r.json().catch(function(){return {};}).then(function(j){return {ok:r.ok,status:r.status,j:j};});})
@@ -1535,6 +1622,29 @@
         if(OC_CHAT_THREADS.length) return selectOpenClawThread(OC_CHAT_THREADS[0].thread_id);
         return createOpenClawChat({}).then(function(thread){return selectOpenClawThread(thread.thread_id);});
       });
+  }
+  function discussOpenClawMeeting(meetingId){
+    var mid=String(meetingId||"");
+    if(!mid) return;
+    var meeting=openClawMeetingById(mid);
+    var prefill="Review the actions and next steps from this meeting. Help me decide what to approve or change.";
+    OC_CHAT_READY=true;
+    go("openclaw");
+    fetch("/dashboard/openclaw/chats",{headers:headers(),cache:"no-store"})
+      .then(function(r){return r.json().catch(function(){return {};}).then(function(j){return {ok:r.ok,status:r.status,j:j};});})
+      .then(function(res){
+        if(!res.ok) throw new Error(res.j.error||("HTTP "+res.status));
+        OC_CHAT_THREADS=res.j.threads||[];
+        renderOpenClawThreads();
+        var existing=OC_CHAT_THREADS.find(function(item){return item.meeting_id===mid;});
+        if(existing) return existing;
+        return createOpenClawChat({
+          meeting_id:mid,
+          title:meeting?openClawMeetingTitle(meeting):"Meeting actions"
+        });
+      })
+      .then(function(thread){if(thread) return selectOpenClawThread(thread.thread_id,prefill);})
+      .catch(function(error){toast("Could not open this meeting in Chat: "+error.message,true);});
   }
   function loadOpenClaw(){
     OC_CHAT_HISTORY=OC_CHAT_HISTORY||[];
@@ -2715,7 +2825,7 @@
   function actionContextLabel(m){
     return m&&m.source_surface==="openclaw_chat"
       ?"Chat workflow"
-      :String((m&&m.platform)||"Meeting")+" meeting";
+      :openClawMeetingTitle(m);
   }
 
   // Owner label OR — when the action couldn't be routed — a visible
@@ -3212,7 +3322,7 @@
   }
 
   // ═════════ Action Center ═════════
-  var acBucket="attn";
+  var acBucket="attn", acOpenMeetingKey="";
   function acTodoText(a){
     var s=stateOf(a);
     if(s==="team_followup") return "Agreed in the meeting, with no tool behind it — a person owns this one. Mark it done once it's handled.";
@@ -3248,12 +3358,12 @@
       b.setAttribute("aria-selected",k===acBucket?"true":"false");
     });
     var now=Date.now()/1000;
-    var rows=actionIndex().filter(function(x){
-      if(bucketOf(x.a)!==acBucket) return false;
+    var filteredRows=actionIndex().filter(function(x){
       if(fa.value!=="all"&&x.m.avatar_id!==fa.value) return false;
       if(fw.value!=="all"&&(now-(x.m.saved_at||0))>parseInt(fw.value,10)*86400) return false;
       return true;
     });
+    var rows=filteredRows.filter(function(x){return bucketOf(x.a)===acBucket;});
     if(!rows.length){
       var msg=acBucket==="attn"?"Nothing needs your attention right now. Actions your avatars capture in meetings appear here for approval."
         :acBucket==="progress"?"Nothing is running right now. Approved actions appear here while they execute."
@@ -3339,45 +3449,62 @@
       return '<article class="ac-card'+(a.source==="inferred"?" proposed":"")+'" data-bucket="'+bucketOf(a)+'">'+
         '<div class="ac-top">'+stateChipHTML(s)+
         '<div class="ac-what"><div class="ac-item" title="Heard: \u201c'+esc(a.item)+'\u201d">'+esc(a.title||a.item)+ownerChip(a)+'</div>'+prov+
-        '<div class="ac-meta">'+avatarBadge(m.avatar_id,avNameOf(m.avatar_id))+'<span>'+esc(avNameOf(m.avatar_id))+'</span>'+
-        '<span aria-hidden="true">·</span><span>'+esc(actionContextLabel(m))+'</span>'+
-        '<span aria-hidden="true">·</span><span>'+fmtWhen(m.saved_at)+'</span></div>'+
         '<div class="ac-todo">'+esc(acTodoText(a))+'</div>'+needsHTML+workflowHTML+'</div>'+
         '<div class="ac-ctl">'+ctl+'</div></div>'+
         (a.action_id?('<button class="ac-open" data-acx="'+esc(a.action_id)+'" aria-expanded="false">View details ▾</button>'+
         '<div class="ac-details" data-acd="'+esc(a.action_id)+'" hidden></div>'):'')+
         '</article>';
     }
-    // Group by MEETING (owner ask 2026-07-22): newest meeting first, one
-    // header per meeting, the Definitive/Proposed split kept inside each
-    // group so the board reads as a per-call story instead of a flat pile.
+    // Meeting-first board: the current status tab decides which cards are
+    // visible, while every meeting header keeps its complete status summary.
     rows.sort(function(p,q){ return (q.m.saved_at||0)-(p.m.saved_at||0); });
+    function meetingKey(x){
+      return (x.m.bot_id||"")+"|"+(x.m.avatar_id||"")+"|"+(x.m.saved_at||0);
+    }
+    var allByKey={};
+    filteredRows.forEach(function(x){
+      var key=meetingKey(x);
+      if(!allByKey[key]) allByKey[key]=[];
+      allByKey[key].push(x);
+    });
     var groups=[], byKey={};
     rows.forEach(function(x){
-      var k=(x.m.bot_id||"")+"|"+(x.m.avatar_id||"")+"|"+(x.m.saved_at||0);
-      if(!byKey[k]){ byKey[k]={m:x.m,rows:[]}; groups.push(byKey[k]); }
+      var k=meetingKey(x);
+      if(!byKey[k]){
+        byKey[k]={key:k,m:x.m,rows:[],allRows:allByKey[k]||[]};
+        groups.push(byKey[k]);
+      }
       byKey[k].rows.push(x);
     });
     var html="";
     groups.forEach(function(g,gi){
-      // Latest meeting open, older ones collapsed behind a one-line summary
-      // (owner 2026-07-22: the board must read at a glance).
-      var open=(gi===0);
+      var open=acOpenMeetingKey?acOpenMeetingKey===g.key:gi===0;
       var nAttn=0,nProg=0,nDone=0;
-      g.rows.forEach(function(x){ var b=bucketOf(x.a); if(b==="attn")nAttn++; else if(b==="progress")nProg++; else nDone++; });
-      var pct=g.rows.length?Math.round(nDone*100/g.rows.length):0;
-      html+='<div class="ac-meet-h'+(open?"":" collapsed")+'" data-acgroup="'+gi+'" role="button" tabindex="0" aria-expanded="'+(open?"true":"false")+'">'+
-        avatarBadge(g.m.avatar_id,avNameOf(g.m.avatar_id))+
-        '<b>'+esc(avNameOf(g.m.avatar_id))+'</b><span aria-hidden="true">·</span>'+
-        '<span>'+esc(actionContextLabel(g.m))+'</span><span aria-hidden="true">·</span>'+
-        '<span>'+fmtWhen(g.m.saved_at)+'</span>'+
-        '<span class="ac-chips" role="group" aria-label="Filter this meeting&#39;s actions">'+
-          '<span class="ac-meet-prog" title="'+nDone+' of '+g.rows.length+' settled" aria-hidden="true"><i style="--p:'+pct+'%"></i></span>'+
-          (nAttn?'<button type="button" class="ac-chip attn" data-acf="attn" aria-pressed="false">'+nAttn+' need you</button>':'')+
-          (nProg?'<button type="button" class="ac-chip prog" data-acf="progress" aria-pressed="false">'+nProg+' running</button>':'')+
-          (nDone?'<button type="button" class="ac-chip settled" data-acf="done" aria-pressed="false">'+nDone+' settled</button>':'')+
-        '</span>'+
-        '<span class="ac-meet-caret" aria-hidden="true">'+(open?"▾":"▸")+'</span></div>';
+      g.allRows.forEach(function(x){ var b=bucketOf(x.a); if(b==="attn")nAttn++; else if(b==="progress")nProg++; else nDone++; });
+      var total=g.allRows.length, pct=total?Math.round(nDone*100/total):0;
+      var fromChat=g.m.source_surface==="openclaw_chat";
+      var workflowAction=g.allRows.find(function(x){return !!x.a.workflow_id;});
+      var groupCommand=fromChat&&workflowAction
+        ?'<button type="button" class="btn" data-ocrefine="'+esc(workflowAction.a.workflow_id)+'">Open workflow chat</button>'
+        :(g.m.bot_id?'<button type="button" class="btn" data-acchat="'+esc(g.m.bot_id)+'">Discuss in Chat</button>':'');
+      var summary=String(g.m.summary||"").trim();
+      html+='<section class="ac-meeting" data-ackey="'+esc(g.key)+'">'+
+        '<div class="ac-meeting-head">'+
+          '<button type="button" class="ac-meet-toggle" data-acgroup="'+gi+'" aria-expanded="'+(open?"true":"false")+'">'+
+            avatarBadge(g.m.avatar_id,avNameOf(g.m.avatar_id))+
+            '<span class="ac-meeting-copy"><span class="ac-meeting-kicker">'+(fromChat?"Chat workflow":"Meeting")+'</span>'+
+              '<span class="ac-meeting-title">'+esc(openClawMeetingTitle(g.m))+'</span>'+
+              '<span class="ac-meeting-meta">'+esc(avNameOf(g.m.avatar_id))+' · '+fmtWhen(g.m.saved_at)+' · '+total+' action'+(total===1?"":"s")+'</span>'+
+              (summary?'<span class="ac-meeting-summary">'+esc(summary)+'</span>':'')+
+            '</span><span class="ac-meet-caret" aria-hidden="true">'+(open?"▾":"▸")+'</span>'+
+          '</button>'+
+          '<div class="ac-meeting-tools"><span class="ac-chips" role="group" aria-label="Open a status for this meeting">'+
+            '<span class="ac-meet-prog" title="'+nDone+' of '+total+' settled" aria-hidden="true"><i style="--p:'+pct+'%"></i></span>'+
+            (nAttn?'<button type="button" class="ac-chip attn'+(acBucket==="attn"?" on":"")+'" data-acf="attn" aria-pressed="'+(acBucket==="attn"?"true":"false")+'">'+nAttn+' need you</button>':'')+
+            (nProg?'<button type="button" class="ac-chip prog'+(acBucket==="progress"?" on":"")+'" data-acf="progress" aria-pressed="'+(acBucket==="progress"?"true":"false")+'">'+nProg+' running</button>':'')+
+            (nDone?'<button type="button" class="ac-chip settled'+(acBucket==="done"?" on":"")+'" data-acf="done" aria-pressed="'+(acBucket==="done"?"true":"false")+'">'+nDone+' settled</button>':'')+
+          '</span>'+groupCommand+'</div>'+
+        '</div>';
       html+='<div class="ac-meet-body" data-acbody="'+gi+'"'+(open?"":" hidden")+'>';
       var defRows=g.rows.filter(function(x){return x.a.source!=="inferred";});
       var propRows=g.rows.filter(function(x){return x.a.source==="inferred";});
@@ -3385,34 +3512,37 @@
       if(propRows.length) html+='<div class="ac-sub-h">Proposed — goals &amp; intents</div>'+
         '<div class="ac-sub-note">Steps decomposed from goals you voiced. Nothing runs until you approve.</div>'+
         propRows.map(acCard).join("");
-      html+='</div>';
+      html+='</div></section>';
     });
     box.innerHTML=html;
     $$("#ac-list [data-acgroup]").forEach(function(h){
       function tgl(){
         var b=box.querySelector('[data-acbody="'+h.getAttribute("data-acgroup")+'"]');
         if(!b) return;
-        var open=b.hidden; b.hidden=!open;
-        h.classList.toggle("collapsed",!open);
+        var open=b.hidden;
+        if(open){
+          $$("#ac-list [data-acbody]").forEach(function(body){body.hidden=true;});
+          $$("#ac-list [data-acgroup]").forEach(function(toggle){
+            toggle.setAttribute("aria-expanded","false");
+            var other=toggle.querySelector(".ac-meet-caret"); if(other) other.textContent="▸";
+          });
+        }
+        b.hidden=!open;
         h.setAttribute("aria-expanded",open?"true":"false");
         var c=h.querySelector(".ac-meet-caret"); if(c) c.textContent=open?"▾":"▸";
+        var section=h.closest("[data-ackey]");
+        acOpenMeetingKey=open&&section?section.getAttribute("data-ackey"):"";
       }
       h.addEventListener("click",tgl);
-      h.addEventListener("keydown",function(e){ if((e.key==="Enter"||e.key===" ")&&e.target===h){ e.preventDefault(); tgl(); } });
     });
-    // Chip filters: click a count chip to see just that state's cards inside
-    // the meeting; click again to clear. Chips never toggle the collapse.
+    // Status chips switch the whole board tab but preserve this meeting as the
+    // open group, so one meeting remains the stable unit of navigation.
     $$("#ac-list [data-acf]").forEach(function(ch){
-      ch.addEventListener("click",function(e){
-        e.stopPropagation();
-        var h=ch.closest("[data-acgroup]"); if(!h) return;
-        var b=box.querySelector('[data-acbody="'+h.getAttribute("data-acgroup")+'"]'); if(!b) return;
-        if(b.hidden){ b.hidden=false; h.classList.remove("collapsed"); h.setAttribute("aria-expanded","true");
-          var c=h.querySelector(".ac-meet-caret"); if(c) c.textContent="\u25be"; }
-        var f=ch.getAttribute("data-acf"), cur=b.getAttribute("data-acfilter");
-        h.querySelectorAll(".ac-chip").forEach(function(x){ x.classList.remove("on"); x.setAttribute("aria-pressed","false"); });
-        if(cur===f){ b.removeAttribute("data-acfilter"); }
-        else{ b.setAttribute("data-acfilter",f); ch.classList.add("on"); ch.setAttribute("aria-pressed","true"); }
+      ch.addEventListener("click",function(){
+        var section=ch.closest("[data-ackey]");
+        acOpenMeetingKey=section?section.getAttribute("data-ackey"):"";
+        acBucket=ch.getAttribute("data-acf")||"attn";
+        renderActions();
       });
     });
     wireAvatarImages();
@@ -3421,6 +3551,7 @@
     $$("#ac-list [data-withdraw]").forEach(function(b){ b.addEventListener("click",function(){ withdrawAction(b); }); });
     $$("#ac-list [data-close]").forEach(function(b){ b.addEventListener("click",function(){ closeAction(b); }); });
     $$("#ac-list [data-acdetailsbtn]").forEach(function(b){ b.addEventListener("click",function(){ openDetailsFor(b.getAttribute("data-acdetailsbtn"),b); }); });
+    $$("#ac-list [data-acchat]").forEach(function(b){ b.addEventListener("click",function(){ discussOpenClawMeeting(b.getAttribute("data-acchat")); }); });
     $$("#ac-list [data-ocrefine]").forEach(function(b){ b.addEventListener("click",function(){ refineOpenClawWorkflow(b.getAttribute("data-ocrefine")); }); });
     $$("#ac-list [data-acx]").forEach(function(b){ b.addEventListener("click",function(){ toggleActionDetails(b); }); });
   }
@@ -4063,9 +4194,10 @@
     svg.innerHTML=g;
   }
 
-  var ocSendBtn=$("#oc-send"), ocMessage=$("#oc-message"), ocNewChat=$("#oc-new-chat");
+  var ocSendBtn=$("#oc-send"), ocMessage=$("#oc-message"), ocNewChat=$("#oc-new-chat"), ocDeleteChat=$("#oc-delete-chat");
   if(ocSendBtn) ocSendBtn.addEventListener("click",sendOpenClawChat);
   if(ocNewChat) ocNewChat.addEventListener("click",newOpenClawChat);
+  if(ocDeleteChat) ocDeleteChat.addEventListener("click",deleteOpenClawChat);
   if(ocMessage) ocMessage.addEventListener("keydown",function(event){
     if(event.key==="Enter"&&!event.shiftKey){
       event.preventDefault();
@@ -4175,9 +4307,9 @@
   // Action Center: primary filter tabs + secondary avatar/date filters
   // (static elements, wire once — the list itself re-renders).
   $$("#ac-tabs button").forEach(function(b){ b.addEventListener("click",function(){
-    acBucket=b.getAttribute("data-ab")||"attn"; renderActions(); }); });
-  $("#ac-avatar").addEventListener("change",renderActions);
-  $("#ac-when").addEventListener("change",renderActions);
+    acBucket=b.getAttribute("data-ab")||"attn"; acOpenMeetingKey=""; renderActions(); }); });
+  $("#ac-avatar").addEventListener("change",function(){acOpenMeetingKey="";renderActions();});
+  $("#ac-when").addEventListener("change",function(){acOpenMeetingKey="";renderActions();});
 
   $("#refresh").addEventListener("click",load);
   // Returning from a connector OAuth (Pipedream opens a new tab / redirects back):

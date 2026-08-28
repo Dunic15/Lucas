@@ -37,40 +37,9 @@ Three deploys are separate — this is the thing that confuses people:
 | Turn-taking / barge-in / follow-up window | `cd relay/cedric-voice-v2 && npx wrangler deploy` |
 | Agent tools, knowledge, voice, LLM | `EL_AGENT_NAME_SUFFIX=" (v2)"` + `create_meeting_agent.py` |
 
-**Never touch** `relay/cedric-voice/` — that is the customers' bridge. Yours is
-`relay/cedric-voice-v2/`.
-
-### 🛑 The ElevenLabs agents — read this before editing one
-
-Four agents sit side by side in the ElevenLabs dashboard, sorted alphabetically,
-**separated by three characters**:
-
-```
-🔴 Cedric Meeting Pilot          ← CUSTOMERS. Editing this changes production, live.
-🟢 Cedric Meeting Pilot (v2)     ← development. Safe.
-🔴 Laura Meeting Pilot           ← CUSTOMERS.
-🟢 Laura Meeting Pilot (v2)      ← development. Safe.
-```
-
-**If the name does not end in `(v2)`, you are editing what customers are talking
-to right now — possibly mid-meeting.**
-
-This is the one change in the whole system that **git cannot undo**. Tools,
-knowledge base, LLM, voice and turn settings live *inside ElevenLabs*, not in
-this repo, so `git revert` and rolling the backend back to `frozen/v1` both
-leave the damage in place. And it fails silently: the script prints `updated`,
-nothing errors, and you find out in a live call.
-
-Two ways to modify an agent, only one of which protects you:
-
-| | Protection |
-|---|---|
-| `create_meeting_agent.py` | `EL_AGENT_NAME_SUFFIX=" (v2)"` picks the dev agent. **Without it the script targets the customers' agent** — it is idempotent by *name*. Always `--dry-run` first and read the printed `name`. |
-| ElevenLabs web dashboard | **None.** You edit whatever you clicked. Check the title before saving. |
-
-The agent ids are in `avatars/*/avatar.yaml`, which is why they differ per
-branch — `frozen/v1` holds the customers' ids, `main` holds the `(v2)` ids.
-**Never point both branches at one id.**
+**Never touch** `relay/cedric-voice/` (customers' bridge), and **never** run
+`create_meeting_agent.py` without the suffix — it is idempotent by agent *name*
+and will silently rewrite the agents your customers are talking to.
 
 Full runbooks: **[`docs/NEXT-ENV.md`](docs/NEXT-ENV.md)** (develop + test) ·
 **[`docs/FREEZE-V1.md`](docs/FREEZE-V1.md)** (freeze, hotfix, ship to customers).

@@ -9,6 +9,7 @@ PRDs / specs / roadmaps from the **product-strategist** agent and founder sessio
 - [`FLOW-AUDIT-2026-07-13.md`](FLOW-AUDIT-2026-07-13.md) — adversarial audit of every user-facing flow (repro + fixes).
 
 ## Active plans (referenced by the roadmap)
+- [`OPENCLAW-EXECUTION-CONTRACT.md`](OPENCLAW-EXECUTION-CONTRACT.md) — OpenClaw experiment: approval boundary, dependency enforcement, exactly-once, live variables + safe smoke test.
 - [`NATIVE-INTEGRATIONS-PLAN.md`](NATIVE-INTEGRATIONS-PLAN.md) — native Calendar/Gmail executor (avatar does its own approved actions).
 - [`PHOTOREAL-DITTO-PLAN.md`](PHOTOREAL-DITTO-PLAN.md) — photoreal talking-avatar (Ditto) phases 1–3.
 - [`SELF-SERVE-FLOW-PLAN.md`](SELF-SERVE-FLOW-PLAN.md) — self-serve connect flow.
